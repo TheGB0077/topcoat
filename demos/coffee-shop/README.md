@@ -2,7 +2,14 @@
 
 A storefront with a searchable menu and drink ordering. It shows how to combine server-rendered pages with browser interactions.
 
-Run it with:
+Clone the Topcoat repository:
+
+```sh
+git clone https://github.com/tokio-rs/topcoat.git
+cd topcoat
+```
+
+Then run it with:
 
 ```sh
 cargo topcoat dev -p coffee-shop
