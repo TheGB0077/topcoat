@@ -22,70 +22,262 @@ async fn hundreds_of_dynamic_positions_in_one_template_compile_and_render_in_ord
     // dynamic position.
     let html = view! {
         cx =>
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
-        <p>(next())</p> item(n: next()) <p>(next())</p> item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
+        <p>(next())</p>
+        item(n: next())
     }
     .boxed()
     .single()

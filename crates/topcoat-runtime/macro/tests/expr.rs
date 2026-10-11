@@ -395,10 +395,7 @@ async fn dynamic_constants_render_bindings() {
     let open = Expr::from(true).dynamic();
     let state = expr!(if open { "open" } else { "closed" });
     assert!(!state.is_static());
-    let html = view! {
-        cx =>
-        <dialog :open=(open) :data-state=(state)></dialog>
-    }
+    let html = view! { cx => <dialog :open=(open) :data-state=(state)></dialog> }
     .single()
     .await
     .unwrap()

@@ -676,10 +676,7 @@ async fn form_card(cx: &Cx) -> Result<impl View> {
                         )
                         field_group(
                             field(
-                                field_label(
-                                    attrs: attributes! { for=(&name_id) },
-                                    "Name"
-                                )
+                                field_label(attrs: attributes! { for=(&name_id) }, "Name")
                                 input(
                                     attrs: attributes! {
                                         id=(&name_id)
@@ -702,7 +699,10 @@ async fn form_card(cx: &Cx) -> Result<impl View> {
                                 )
                             )
                             field(
-                                field_label(attrs: attributes! { for=(&region_id) }, "Region")
+                                field_label(
+                                    attrs: attributes! { for=(&region_id) },
+                                    "Region"
+                                )
                                 select(
                                     attrs: attributes! {
                                         id=(&region_id)
@@ -745,7 +745,10 @@ async fn form_card(cx: &Cx) -> Result<impl View> {
                             field_separator()
                             field(
                                 orientation: FieldOrientation::Responsive,
-                                field_label(attrs: attributes! { for=(&owner_id) }, "Owner")
+                                field_label(
+                                    attrs: attributes! { for=(&owner_id) },
+                                    "Owner"
+                                )
                                 // A disabled field shows a value that is not the
                                 // form's to change.
                                 field_content(
@@ -908,10 +911,7 @@ async fn radios_card(cx: &Cx) -> Result<impl View> {
                                     disabled=(disabled)
                                 }
                             )
-                            field_label(
-                                attrs: attributes! { for=(&id) },
-                                (text)
-                            )
+                            field_label(attrs: attributes! { for=(&id) }, (text))
                         )
                     }
                 )
@@ -1900,10 +1900,7 @@ async fn app_sidebar(cx: &Cx, open: Signal<bool>, mobile_open: Signal<bool>) -> 
             sidebar_footer(
                 <div class="md:group-data-[collapsible=icon]/sidebar:hidden">
                     toggle_group(
-                        attrs: attributes! {
-                            role="radiogroup"
-                            aria-label="Sidebar variant"
-                        },
+                        attrs: attributes! { role="radiogroup" aria-label="Sidebar variant" },
                         for (value, text) in [
                             ("sidebar", "Sidebar"),
                             ("floating", "Floating"),

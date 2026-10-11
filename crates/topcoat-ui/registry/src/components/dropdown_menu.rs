@@ -44,7 +44,10 @@ pub async fn dropdown_menu(
     #[default] child: Child<'_>,
 ) -> Result<impl View> {
     Ok(view! {
-        <div class=(class!("group/dropdown-menu contents", attrs.remove("class"))) (attrs)>
+        <div
+            class=(class!("group/dropdown-menu contents", attrs.remove("class")))
+            (attrs)
+        >
             (child)
         </div>
     })
@@ -213,7 +216,10 @@ pub async fn dropdown_menu_sub(
     #[default] child: Child<'_>,
 ) -> Result<impl View> {
     Ok(view! {
-        <div class=(class!("group/dropdown-menu-sub contents", attrs.remove("class"))) (attrs)>
+        <div
+            class=(class!("group/dropdown-menu-sub contents", attrs.remove("class")))
+            (attrs)
+        >
             (child)
         </div>
     })
