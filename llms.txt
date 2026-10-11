@@ -29,6 +29,8 @@ async fn home() -> Result<impl View> {
 
 Defaults include router/view/runtime/serve/discover, asset/compression/cookie/session/font/icon; `full` enables all. Other feature names appear below. Import `RouterBuilder*Ext` traits for extension methods. Features expose APIs; builder calls install services. Exact flags: `crates/topcoat/Cargo.toml`.
 
+When formatting with `cargo fmt`, also run [`topcoat fmt`](docs/cli/fmt.md) to format macro bodies such as `view!`, unless the project says otherwise. `--rustfmt` runs rustfmt first; `--stdin --rustfmt` supports editor overrides. `--check` reports inputs needing formatting without writing; exits nonzero for differences or errors. Rustfmt must be on PATH; set `edition` in `rustfmt.toml` because input is piped to rustfmt.
+
 ## Routing and HTTP
 
 - [Module routing](docs/router/module.md): `module_router!()` maps its enclosing module to `/`; descendants add kebab-case segments. Declare children with `mod`; no filesystem scan. Function names do not affect URLs. `_group` modules scope layouts/layers without URL segments. `segment!(rename = "...")` or `kind = Static|Group|Param|CatchAll` overrides a segment.
@@ -99,9 +101,3 @@ Ok(view! {
 - [Sitemap](docs/router/content/sitemap.md), `sitemap`: return `Sitemap::new().url(...)`; relative entries require `.base_url(...)`. `SitemapUrl` adds last-modified/frequency/priority.
 - [Tower](docs/router/tower.md), `tower`: TowerRoute mounts services, TowerLayer wraps handling, TowerService exposes Topcoat. Full URI forwarded; StripPrefixLayer opts into stripping. Register catch-all prefix separately. No middleware retries.
 - [htmx](docs/htmx.md), `htmx`: `hx_request(cx)` chooses fragments; Hx* response parts precede body. [Alpine AJAX](docs/alpine_ajax.md), `alpine-ajax`: `ajax_request/ajax_targets` choose fragments; load plugin before Alpine, both deferred. [Datastar](docs/datastar.md), `datastar`: Signals<T> reads GET query/non-GET body; PatchElements/PatchSignals emit SSE updates. Load each library's browser script separately.
-
-## Working in this repository
-
-[`topcoat fmt`](docs/cli/fmt.md) formats macro bodies. Add `--check` to report inputs needing formatting without writing files or emitting formatted source; exits nonzero for formatting differences or errors. Add `--rustfmt` to run rustfmt first; `--stdin --rustfmt` supports editor overrides. Rustfmt must be on PATH; set `edition` in `rustfmt.toml` because input is piped to rustfmt.
-
-For framework changes, also read [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
