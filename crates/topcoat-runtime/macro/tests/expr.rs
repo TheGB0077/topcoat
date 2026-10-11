@@ -396,10 +396,10 @@ async fn dynamic_constants_render_bindings() {
     let state = expr!(if open { "open" } else { "closed" });
     assert!(!state.is_static());
     let html = view! { cx => <dialog :open=(open) :data-state=(state)></dialog> }
-    .single()
-    .await
-    .unwrap()
-    .render(cx);
+        .single()
+        .await
+        .unwrap()
+        .render(cx);
 
     assert!(html.contains("data-topcoat-bind:open="), "{html}");
     assert!(html.contains("data-topcoat-bind:data-state="), "{html}");
