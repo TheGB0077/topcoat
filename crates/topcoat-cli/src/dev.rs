@@ -34,49 +34,56 @@ pub struct DevCommand {
 impl DevCommand {
     pub async fn run(self) {
         let mut opts: BuildOpts = self.build.into();
+        resolve_bin(&mut opts).await;
+        run(opts, "dev server").await;
+    }
+}
 
-        // A package with several bin targets (an extra `src/bin/*.rs`, say) makes
-        // `cargo build` link all of them, and the build cannot tell which one to
-        // serve. `[package] default-run` already names it, so honour it here the way
-        // a bare `cargo run` would. An explicit `--bin` still wins.
-        if opts.bin.is_none()
-            && let Some(metadata) = Metadata::workspace().await
-            && let Some(bin) = metadata.default_run_for_build(opts.package.as_deref())
-        {
-            opts.bin = Some(bin);
-        }
+/// Names the bin target from `[package] default-run` when the flags name
+/// none, the way a bare `cargo run` would.
+pub(crate) async fn resolve_bin(opts: &mut BuildOpts) {
+    // A package with several bin targets (an extra `src/bin/*.rs`, say) makes
+    // `cargo build` link all of them, and the build cannot tell which one to
+    // serve. `[package] default-run` already names it, so honour it here the way
+    // a bare `cargo run` would. An explicit `--bin` still wins.
+    if opts.bin.is_none()
+        && let Some(metadata) = Metadata::workspace().await
+        && let Some(bin) = metadata.default_run_for_build(opts.package.as_deref())
+    {
+        opts.bin = Some(bin);
+    }
+}
 
-        // The broadcast server outlives the individual application
-        // processes: browsers stay connected to it across rebuilds.
-        let listener = broadcast_server::bind().await;
-        let dev_url = format!("http://{}", listener.local_addr().unwrap());
-        let events = EventBus::new();
-        tokio::spawn(broadcast_server::run(listener, events.clone()));
+/// Runs the build, watch, and reload loop, calling the served process `name`
+/// on the terminal. `topcoat story` runs the same loop under its own name.
+pub(crate) async fn run(opts: BuildOpts, name: &str) {
+    // The broadcast server outlives the individual application
+    // processes: browsers stay connected to it across rebuilds.
+    let listener = broadcast_server::bind().await;
+    let dev_url = format!("http://{}", listener.local_addr().unwrap());
+    let events = EventBus::new();
+    tokio::spawn(broadcast_server::run(listener, events.clone()));
 
-        eprintln!();
-        eprint!(
-            "  {} {}",
-            style("topcoat").cyan().bold(),
-            style("dev server").dim()
+    eprintln!();
+    eprint!("  {} {}", style("topcoat").cyan().bold(), style(name).dim());
+    // Flag a non-default profile; `None` is cargo's default `dev` profile,
+    // which is the norm and needs no mention.
+    if let Some(profile) = opts.profile.as_deref().filter(|&p| p != "dev") {
+        eprint!(" {}", style(format!("[{profile}]")).yellow());
+    }
+    eprintln!();
+    let mut watcher = SourceWatcher::start().await;
+    let mut keyboard = Keyboard::start();
+    eprintln!("  {}", style("watching for file changes...").dim());
+    if keyboard.is_listening() {
+        eprintln!(
+            "  {} {} {}",
+            style("press").dim(),
+            style("r").green().bold(),
+            style("to reload").dim()
         );
-        // Flag a non-default profile; `None` is cargo's default `dev` profile,
-        // which is the norm and needs no mention.
-        if let Some(profile) = opts.profile.as_deref().filter(|&p| p != "dev") {
-            eprint!(" {}", style(format!("[{profile}]")).yellow());
-        }
-        eprintln!();
-        let mut watcher = SourceWatcher::start().await;
-        let mut keyboard = Keyboard::start();
-        eprintln!("  {}", style("watching for file changes...").dim());
-        if keyboard.is_listening() {
-            eprintln!(
-                "  {} {} {}",
-                style("press").dim(),
-                style("r").green().bold(),
-                style("to reload").dim()
-            );
-        }
-        eprintln!();
+    }
+    eprintln!();
 
         let mut build: Option<BuildTask> = Some(BuildTask::spawn(BuildKind::Initial, opts.clone()));
         let mut server: Option<AppServer> = None;
@@ -89,24 +96,24 @@ impl DevCommand {
         let mut force_restart = false;
         events.publish(Event::Rebuilding);
 
-        loop {
-            // `select!` evaluates every branch expression even when its `if`
-            // guard is false (it just never polls the future), so the
-            // `unwrap`s must sit inside lazy `async` blocks.
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    eprintln!();
-                    let spinner = Spinner::new("shutting down...");
-                    if let Some(build) = build.take() {
-                        build.cancel().await;
-                    }
-                    if let Some(server) = server.take() {
-                        server.shutdown().await;
-                    }
-                    drop(spinner);
-                    eprintln!();
-                    break;
+    loop {
+        // `select!` evaluates every branch expression even when its `if`
+        // guard is false (it just never polls the future), so the
+        // `unwrap`s must sit inside lazy `async` blocks.
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!();
+                let spinner = Spinner::new("shutting down...");
+                if let Some(build) = build.take() {
+                    build.cancel().await;
                 }
+                if let Some(server) = server.take() {
+                    server.shutdown().await;
+                }
+                drop(spinner);
+                eprintln!();
+                break;
+            }
 
                 output = async { build.as_mut().unwrap().finished().await }, if build.is_some() => {
                     build = None;
@@ -138,37 +145,36 @@ impl DevCommand {
                         events.publish(Event::BuildFailed);
                         report_waiting(server.is_some());
                     }
-                }
+            }
 
-                status = async { server.as_mut().unwrap().exited().await }, if server.is_some() => {
-                    server = None;
-                    events.publish(Event::AppExited);
-                    let status = status.map_or_else(|error| error.to_string(), |status| status.to_string());
-                    eprintln!(
-                        "  {}",
-                        style(format!("application exited ({status})")).red().bold()
-                    );
-                    eprintln!();
-                    report_waiting(false);
-                }
+            status = async { server.as_mut().unwrap().exited().await }, if server.is_some() => {
+                server = None;
+                events.publish(Event::AppExited);
+                let status = status.map_or_else(|error| error.to_string(), |status| status.to_string());
+                eprintln!(
+                    "  {}",
+                    style(format!("application exited ({status})")).red().bold()
+                );
+                eprintln!();
+                report_waiting(false);
+            }
 
-                change = watcher.changed() => {
-                    // A manifest change can add or remove local packages, so
-                    // the watched directories are re-derived before building.
-                    if change == Change::Manifest {
-                        watcher = SourceWatcher::start().await;
-                    }
-                    rebuild(&mut build, &opts, &events).await;
+            change = watcher.changed() => {
+                // A manifest change can add or remove local packages, so
+                // the watched directories are re-derived before building.
+                if change == Change::Manifest {
+                    watcher = SourceWatcher::start().await;
                 }
+                rebuild(&mut build, &opts, &events).await;
+            }
 
-                () = keyboard.reload_requested() => {
-                    // A manual reload is handled like a file change (the
-                    // running application keeps serving until the fresh
-                    // build is ready), but always restarts the application:
-                    // the point of pressing `r` is a fresh process.
-                    force_restart = true;
-                    rebuild(&mut build, &opts, &events).await;
-                }
+            () = keyboard.reload_requested() => {
+                // A manual reload is handled like a file change (the
+                // running application keeps serving until the fresh
+                // build is ready), but always restarts the application:
+                // the point of pressing `r` is a fresh process.
+                force_restart = true;
+                rebuild(&mut build, &opts, &events).await;
             }
         }
     }

@@ -3,11 +3,8 @@
 use topcoat::{
     Result,
     context::Cx,
-    router::{
-        Body, Router, RouterBuilderDiscoverExt, module_router, query_params, request::Request,
-        to_bytes,
-    },
-    story::story,
+    router::{Body, Router, query_params, request::Request, to_bytes},
+    story::{RouterBuilderDashboardExt, story},
     view::{View, component, view},
 };
 
@@ -51,19 +48,19 @@ async fn fetch(router: &Router, path: &str) -> (u16, String) {
 }
 
 fn router() -> Router {
-    module_router!().discover().build()
+    Router::builder().dashboard().build()
 }
 
 #[tokio::test]
 async fn index_lists_registered_stories() {
-    let (status, html) = fetch(&router(), "/designbook").await;
+    let (status, html) = fetch(&router(), "/").await;
     assert_eq!(status, 200, "{html}");
-    assert!(html.contains("/designbook/Shop/Badge/Default"), "{html}");
+    assert!(html.contains("/Shop/Badge/Default"), "{html}");
 }
 
 #[tokio::test]
 async fn story_page_renders_canvas_controls_and_source() {
-    let (status, html) = fetch(&router(), "/designbook/Shop/Badge/Default").await;
+    let (status, html) = fetch(&router(), "/Shop/Badge/Default").await;
     assert_eq!(status, 200, "{html}");
     assert!(html.contains("badge:plain false"), "{html}");
     assert!(html.contains("tone"), "{html}");
@@ -73,24 +70,20 @@ async fn story_page_renders_canvas_controls_and_source() {
 
 #[tokio::test]
 async fn story_page_applies_control_values() {
-    let (status, html) = fetch(
-        &router(),
-        "/designbook/Shop/Badge/Default?tone=loud&glow=true",
-    )
-    .await;
+    let (status, html) = fetch(&router(), "/Shop/Badge/Default?tone=loud&glow=true").await;
     assert_eq!(status, 200, "{html}");
     assert!(html.contains("badge:loud true"), "{html}");
 }
 
 #[tokio::test]
 async fn unknown_story_is_not_found() {
-    let (status, _) = fetch(&router(), "/designbook/Shop/Badge/Missing").await;
+    let (status, _) = fetch(&router(), "/Shop/Badge/Missing").await;
     assert_eq!(status, 404);
 }
 
 #[tokio::test]
 async fn manifest_lists_story_urls() {
-    let (status, html) = fetch(&router(), "/designbook/manifest.json").await;
+    let (status, html) = fetch(&router(), "/manifest.json").await;
     assert_eq!(status, 200, "{html}");
-    assert!(html.contains("/designbook/Shop/Badge/Default"), "{html}");
+    assert!(html.contains("/Shop/Badge/Default"), "{html}");
 }

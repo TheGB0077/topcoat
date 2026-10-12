@@ -18,6 +18,9 @@ pub struct BuildOpts {
     pub package: Option<String>,
     /// The cargo profile to build with, or `None` for the default (`dev`).
     pub profile: Option<String>,
+    /// Cargo features to enable on top of the target's own, as `package/feature`
+    /// or bare feature names.
+    pub features: Vec<String>,
 }
 
 impl BuildOpts {
@@ -112,6 +115,9 @@ impl BuildOpts {
         if let Some(profile) = &self.profile {
             cmd.args(["--profile", profile]);
         }
+        if !self.features.is_empty() {
+            cmd.arg("--features").arg(self.features.join(","));
+        }
         cmd
     }
 }
@@ -145,6 +151,7 @@ impl From<BuildFlags> for BuildOpts {
             bin: flags.bin,
             package: flags.package,
             profile,
+            features: Vec::new(),
         }
     }
 }

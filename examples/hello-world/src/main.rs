@@ -1,6 +1,7 @@
 use topcoat::{
     Result,
     router::{module_router, page},
+    story::story,
     view::{View, component, view},
 };
 
@@ -35,4 +36,11 @@ async fn hello(name: &str) -> Result<impl View> {
             "!"
         </h1>
     })
+}
+
+/// Says hello to nobody in particular.
+#[story(group = "Smoke", component = "Hello", name = "Default")]
+#[component]
+async fn hello_default() -> Result<impl View> {
+    Ok(view! { <p>"smoke story"</p> })
 }

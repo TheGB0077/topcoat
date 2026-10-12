@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
-topcoat.workspace = true
+topcoat = { workspace = true, features = ["story"] }
 
 [lints]
 workspace = true
