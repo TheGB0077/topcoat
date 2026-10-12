@@ -12,7 +12,7 @@ mod registry;
 pub use registry::*;
 
 #[cfg(feature = "router")]
-mod gallery;
+mod dashboard;
 
 #[cfg(feature = "router")]
-pub use gallery::*;
+pub use dashboard::*;

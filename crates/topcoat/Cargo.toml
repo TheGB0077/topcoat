@@ -89,6 +89,12 @@ story = [
 	"dep:topcoat-story-macro",
 	"topcoat-story/router",
 ]
+design-story = [
+	"story",
+	"router",
+	"view",
+	"serve",
+]
 discover = [
 	"dep:inventory",
 	"topcoat-font?/discover",

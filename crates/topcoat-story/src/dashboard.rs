@@ -1,20 +1,22 @@
-//! The workshop gallery: sidebar, canvas, controls, and source panels.
+//! The story dashboard: sidebar, canvas, controls, and source panels.
 //!
-//! The pages below use absolute paths, so any application binary that
-//! enables the `story` feature and calls `.discover()` serves them. No
-//! application wiring is needed beyond the feature flag. Gallery chrome
-//! uses inline styles rather than the application's stylesheet, so the
-//! workshop looks right in any app while stories render in the app's own
-//! styling for production fidelity.
+//! Register the dashboard's routes on a router with
+//! [`dashboard`](RouterBuilderDashboardExt::dashboard). The routes live at
+//! the root of that router, so a workshop takes no route of its own from an
+//! application that happens to link this crate. Chrome uses inline styles
+//! rather than the application's stylesheet, so the dashboard looks right
+//! in any app while stories render in the app's own styling for production
+//! fidelity.
 
 use std::{fmt::Write as _, path::Path};
 
 use topcoat_core::{context::Cx, error::Result};
 use topcoat_router::{
-    HeaderValue, content::Json, error::RouterErrorExt, header, path_param, request::uri,
+    Body, HeaderValue, Method, PageFn, RouteFn, RouteFuture, RouterBuilder, content::Json,
+    error::RouterErrorExt, header, path_param, request::uri, response::IntoResponse,
 };
-use topcoat_router_macro::{page, path_param, route};
-use topcoat_view::{Child, View};
+use topcoat_router_macro::path_param;
+use topcoat_view::{BoxView, Child, HoistView, View, internal::ThenView};
 use topcoat_view_macro::{component, view};
 
 use super::{Frame, ParamKind, StoryEntry, find, stories};
@@ -32,14 +34,22 @@ fn encode_segment(segment: &str) -> String {
     out
 }
 
-/// The canonical gallery URL for a story: the URL is the saved state.
+/// The canonical dashboard URL for a story: the URL is the saved state.
 fn story_url(group: &str, component: &str, name: &str) -> String {
     format!(
-        "/designbook/{}/{}/{}",
+        "/{}/{}/{}",
         encode_segment(group),
         encode_segment(component),
         encode_segment(name)
     )
+}
+
+/// The source of the dev server's update script, when the dashboard runs
+/// under `topcoat story run`. Renders nothing when there is no dev server.
+fn dev_script() -> Option<String> {
+    std::env::var("TOPCOAT_DEV_URL")
+        .ok()
+        .map(|base| format!("{base}/dev.js"))
 }
 
 /// One sidebar group: a name holding components.
@@ -122,7 +132,7 @@ fn read_source(source_file: &str) -> Option<String> {
     None
 }
 
-/// The gallery shell: sidebar registry tree plus the page content.
+/// The dashboard shell: sidebar registry tree plus the page content.
 #[component]
 async fn chrome(title: &str, #[default] child: Child<'_>) -> Result<impl View> {
     let tree = sidebar_tree();
@@ -136,6 +146,9 @@ async fn chrome(title: &str, #[default] child: Child<'_>) -> Result<impl View> {
                     (title)
                     " — designbook"
                 </title>
+                if let Some(src) = dev_script() {
+                    <script src=(src)></script>
+                }
             </head>
             <body
                 style="margin:0;display:flex;min-height:100vh;font-family:system-ui,sans-serif;background:#faf8f5;color:#2c221e"
@@ -146,10 +159,7 @@ async fn chrome(title: &str, #[default] child: Child<'_>) -> Result<impl View> {
                     <p
                         style="margin:0 0 12px;font-weight:800;letter-spacing:0.08em;font-size:12px;text-transform:uppercase"
                     >
-                        <a
-                            href="/designbook"
-                            style="color:inherit;text-decoration:none"
-                        >
+                        <a href="/" style="color:inherit;text-decoration:none">
                             "Designbook"
                         </a>
                     </p>
@@ -261,27 +271,30 @@ async fn control(
     })
 }
 
-/// `GET /designbook` — the workshop index.
-#[page("/designbook")]
-async fn index() -> Result<impl View> {
-    Ok(view! {
+/// The dashboard index.
+fn index_view(cx: &Cx) -> impl View {
+    let empty = stories().is_empty();
+    view! {
+        cx =>
         ((header::CACHE_CONTROL, HeaderValue::from_static("no-store")))
         chrome(
             title: "Index",
             <h1 style="margin-top:0">"Stories"</h1>
-            <p>"Pick a story from the sidebar."</p>
+            if empty {
+                <p>"No stories registered yet. Add a #[story] to a component."</p>
+            } else {
+                <p>"Pick a story from the sidebar."</p>
+            }
         )
-    })
+    }
 }
 
 path_param!(group);
 path_param!(component);
 path_param!(story_name);
 
-/// `GET /designbook/{group}/{component}/{story}` — one story with its
-/// controls and source panels.
-#[page("/designbook/{group}/{component}/{story_name}")]
-async fn story_page(cx: &Cx) -> Result<impl View> {
+/// One story, with its controls and source panels.
+fn story_page_view(cx: &Cx) -> Result<impl View> {
     let group = path_param::<Group>(cx);
     let component = path_param::<Component>(cx);
     let name = path_param::<StoryName>(cx);
@@ -289,6 +302,7 @@ async fn story_page(cx: &Cx) -> Result<impl View> {
     let query = uri(cx).query().map(str::to_owned);
 
     Ok(view! {
+        cx =>
         ((header::CACHE_CONTROL, HeaderValue::from_static("no-store")))
         chrome(
             title: entry.meta.name,
@@ -357,16 +371,15 @@ pub struct ManifestEntry {
     pub component: &'static str,
     /// Story name inside the component.
     pub name: &'static str,
-    /// Canonical gallery URL: the URL is the saved state.
+    /// Canonical dashboard URL: the URL is the saved state.
     pub url: String,
 }
 
-/// `GET /designbook/manifest.json` — every story URL, for snapshot and
-/// pixel test runners to walk without hand-maintained lists.
-#[route(GET "/designbook/manifest.json")]
-async fn manifest() -> Result<Json<Vec<ManifestEntry>>> {
-    Ok(Json(
-        stories()
+/// `GET /manifest.json` — every story URL, for snapshot and pixel test
+/// runners to walk without hand-maintained lists.
+fn manifest(cx: &Cx, _body: Body) -> RouteFuture<'_> {
+    Box::pin(async move {
+        let entries: Vec<ManifestEntry> = stories()
             .iter()
             .map(|entry| ManifestEntry {
                 group: entry.meta.group,
@@ -374,8 +387,48 @@ async fn manifest() -> Result<Json<Vec<ManifestEntry>>> {
                 name: entry.meta.name,
                 url: story_url(entry.meta.group, entry.meta.component, entry.meta.name),
             })
-            .collect(),
-    ))
+            .collect();
+        Json(entries).into_response(cx)
+    })
+}
+
+/// Renders one dashboard page from the view `render` resolves to, with the
+/// parts it hoists collected ahead of its content.
+fn page<'cx, V: View + 'cx>(render: impl Future<Output = Result<V>> + Send + 'cx) -> BoxView<'cx> {
+    Box::pin(HoistView::new(ThenView::new(render)))
+}
+
+/// `GET /` — the dashboard index.
+fn index_page(cx: &Cx, _body: Body) -> BoxView<'_> {
+    page(async move { Ok(index_view(cx)) })
+}
+
+/// `GET /{group}/{component}/{story}` — one story.
+fn story_page_route(cx: &Cx, _body: Body) -> BoxView<'_> {
+    page(async move { story_page_view(cx) })
+}
+
+/// Registers the story dashboard's routes on a router builder.
+///
+/// The routes sit at the root of the router they are registered on: the
+/// index at `/`, one page per story at `/{group}/{component}/{story}`, and
+/// the story manifest at `/manifest.json`.
+pub trait RouterBuilderDashboardExt {
+    /// Registers the dashboard's routes.
+    #[must_use]
+    fn dashboard(self) -> Self;
+}
+
+impl RouterBuilderDashboardExt for RouterBuilder {
+    fn dashboard(self) -> Self {
+        self.page(PageFn::new(Method::GET, "/", index_page))
+            .page(PageFn::new(
+                Method::GET,
+                "/{group}/{component}/{story_name}",
+                story_page_route,
+            ))
+            .route(RouteFn::new(Method::GET, "/manifest.json", manifest))
+    }
 }
 
 #[cfg(test)]
@@ -388,13 +441,13 @@ mod tests {
         assert_eq!(encode_segment("plain-1.0~x_y"), "plain-1.0~x_y");
         assert_eq!(
             story_url("Shop", "Badge", "Sold out"),
-            "/designbook/Shop/Badge/Sold%20out"
+            "/Shop/Badge/Sold%20out"
         );
     }
 
     #[test]
     fn reads_registry_sources_from_ancestor_directories() {
-        let source = read_source("crates/topcoat-story/src/gallery.rs").expect("source resolves");
+        let source = read_source("crates/topcoat-story/src/dashboard.rs").expect("source resolves");
         assert!(source.contains("source panel"));
     }
 }
