@@ -5,13 +5,87 @@ use syn::{
     parse::{Parse, ParseStream},
     spanned::Spanned,
 };
-use topcoat_core_grammar::paths::{topcoat_inventory, topcoat_story};
+use topcoat_core_grammar::paths::{
+    topcoat_context, topcoat_inventory, topcoat_story, topcoat_view,
+};
 
 mod kw {
     syn::custom_keyword!(group);
     syn::custom_keyword!(component);
     syn::custom_keyword!(name);
     syn::custom_keyword!(frame);
+    syn::custom_keyword!(params);
+}
+
+/// One control in the story's controls panel: a query key with its widget.
+pub struct StoryParam {
+    kind: Ident,
+    name: LitStr,
+    options: Vec<LitStr>,
+}
+
+impl StoryParam {
+    /// The query key the control reads and writes.
+    fn key(&self) -> &LitStr {
+        &self.name
+    }
+}
+
+impl Parse for StoryParam {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let kind: Ident = input.parse()?;
+        if kind != "select" && kind != "toggle" && kind != "text" {
+            return Err(syn::Error::new_spanned(
+                &kind,
+                "expected select, toggle, or text",
+            ));
+        }
+        let content;
+        syn::parenthesized!(content in input);
+        let name: LitStr = content.parse()?;
+        let mut options = Vec::new();
+        if !content.is_empty() {
+            content.parse::<Token![,]>()?;
+            let options_content;
+            syn::bracketed!(options_content in content);
+            while !options_content.is_empty() {
+                options.push(options_content.parse::<LitStr>()?);
+                if options_content.is_empty() {
+                    break;
+                }
+                options_content.parse::<Token![,]>()?;
+            }
+        }
+        if kind == "select" && options.is_empty() {
+            return Err(syn::Error::new_spanned(
+                &kind,
+                "select needs at least one option",
+            ));
+        }
+        if kind != "select" && !options.is_empty() {
+            return Err(syn::Error::new_spanned(&kind, "only select takes options"));
+        }
+        Ok(Self {
+            kind,
+            name,
+            options,
+        })
+    }
+}
+
+impl ToTokens for StoryParam {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let name = self.key();
+        let kind = if self.kind == "select" {
+            let options = &self.options;
+            quote! { #topcoat_story::ParamKind::Select(&[#(#options),*]) }
+        } else if self.kind == "toggle" {
+            quote! { #topcoat_story::ParamKind::Toggle }
+        } else {
+            quote! { #topcoat_story::ParamKind::Text }
+        };
+        quote! { #topcoat_story::ParamDef { name: #name, kind: #kind } }.to_tokens(tokens);
+    }
 }
 
 /// The `#[story]` attribute: which sidebar entry the annotated function is.
@@ -20,6 +94,7 @@ pub struct StoryAttr {
     component: LitStr,
     name: LitStr,
     frame: Option<Ident>,
+    params: Vec<StoryParam>,
 }
 
 impl StoryAttr {
@@ -39,6 +114,7 @@ impl Parse for StoryAttr {
         let mut component = None;
         let mut name = None;
         let mut frame = None;
+        let mut params = Vec::new();
 
         while !input.is_empty() {
             let lookahead = input.lookahead1();
@@ -68,6 +144,30 @@ impl Parse for StoryAttr {
                     ));
                 }
                 frame = Some(variant);
+            } else if lookahead.peek(kw::params) {
+                input.parse::<kw::params>()?;
+                input.parse::<Token![=]>()?;
+                let content;
+                syn::bracketed!(content in input);
+                while !content.is_empty() {
+                    params.push(content.parse::<StoryParam>()?);
+                    if content.is_empty() {
+                        break;
+                    }
+                    content.parse::<Token![,]>()?;
+                }
+                for param in &params {
+                    let duplicates = params
+                        .iter()
+                        .filter(|other| other.key().value() == param.key().value())
+                        .count();
+                    if duplicates > 1 {
+                        return Err(syn::Error::new(
+                            param.key().span(),
+                            "duplicate control for this query key",
+                        ));
+                    }
+                }
             } else {
                 return Err(lookahead.error());
             }
@@ -98,6 +198,7 @@ impl Parse for StoryAttr {
             component: component.expect("component is present"),
             name: name.expect("name is present"),
             frame,
+            params,
         })
     }
 }
@@ -176,16 +277,30 @@ impl ToTokens for Story {
         let attr = &self.0;
         let story = &self.1;
         let item = &story.item;
+        let ident = &item.sig.ident;
         let group = &attr.group;
         let component = &attr.component;
         let name = &attr.name;
         let frame = attr.frame();
         let description = LitStr::new(&story.description(), Span::call_site());
+        let params = &attr.params;
 
         quote! {
             #item
 
             const _: () = {
+                fn render(
+                    cx: &#topcoat_context::Cx,
+                ) -> #topcoat_view::BoxView<'_> {
+                    ::std::boxed::Box::pin(#topcoat_view::HoistView::new(
+                        #topcoat_view::internal::ThenView::new(async move {
+                            let props = <#ident as #topcoat_view::Component>::props_builder()
+                                .build();
+                            <#ident as #topcoat_view::Component>::render(#ident, cx, props).await
+                        }),
+                    ))
+                }
+
                 #topcoat_inventory::submit! {
                     #topcoat_story::StoryEntry {
                         meta: #topcoat_story::StoryMeta {
@@ -195,7 +310,9 @@ impl ToTokens for Story {
                             description: #description,
                             frame: #frame,
                             source_file: ::core::file!(),
-                        }
+                            params: &[#(#params),*],
+                        },
+                        render,
                     }
                 }
             };
