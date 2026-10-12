@@ -8,6 +8,8 @@ fn story() {
         quote! { group = "Catalog", component = "Card", name = "Default" },
         quote! { name = "Dark", component = "Card", group = "Catalog", frame = Dark },
         quote! { group = "Catalog", component = "Card", name = "Bare", frame = Bare, },
+        quote! { group = "Catalog", component = "Card", name = "Toned", params = [select("tone", ["plain", "loud"])] },
+        quote! { group = "Catalog", component = "Card", name = "Flagged", params = [toggle("glow"), text("label"),] },
     ];
     for attr in attrs {
         assert_deterministic(|| {
@@ -27,7 +29,7 @@ fn story() {
 #[test]
 fn expansion_registers_meta_in_submit() {
     let expanded = Story::parse(
-        quote! { group = "Catalog", component = "Card", name = "Sale", frame = Dark },
+        quote! { group = "Catalog", component = "Card", name = "Sale", frame = Dark, params = [select("tone", ["plain", "loud"]), toggle("glow")] },
         quote! {
             /// Struck-through base price.
             /// Badge emphasis.
@@ -47,6 +49,9 @@ fn expansion_registers_meta_in_submit() {
         "description:\"Struck-throughbaseprice.\\nBadgeemphasis.\"",
         "::topcoat_story::Frame::Dark",
         "::core::file!()",
+        "ParamDef{name:\"tone\",kind:::topcoat_story::ParamKind::Select(&[\"plain\",\"loud\"])}",
+        "ParamDef{name:\"glow\",kind:::topcoat_story::ParamKind::Toggle}",
+        "fnrender(",
     ] {
         let compact_part: String = part.split_whitespace().collect();
         assert!(compact.contains(&compact_part), "{expanded}");

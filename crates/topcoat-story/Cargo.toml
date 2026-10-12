@@ -10,8 +10,29 @@ keywords.workspace = true
 categories.workspace = true
 rust-version.workspace = true
 
+[features]
+router = [
+	"dep:topcoat-router",
+	"dep:topcoat-router-macro",
+	"dep:topcoat-view-macro",
+	"dep:serde",
+	"dep:serde_json",
+]
+
 [dependencies]
+topcoat-core.workspace = true
+topcoat-view.workspace = true
+topcoat-router = { workspace = true, optional = true }
+topcoat-router-macro = { workspace = true, optional = true }
+topcoat-view-macro = { workspace = true, optional = true }
+
 inventory.workspace = true
+serde = { workspace = true, features = ["derive"], optional = true }
+serde_json = { workspace = true, optional = true }
+
+[dev-dependencies]
+topcoat = { workspace = true, features = ["story", "view", "router"] }
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true

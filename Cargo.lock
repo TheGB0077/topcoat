@@ -5700,6 +5700,15 @@ name = "topcoat-story"
 version = "0.10.0"
 dependencies = [
  "inventory",
+ "serde",
+ "serde_json",
+ "tokio",
+ "topcoat",
+ "topcoat-core",
+ "topcoat-router",
+ "topcoat-router-macro",
+ "topcoat-view",
+ "topcoat-view-macro",
 ]
 
 [[package]]

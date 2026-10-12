@@ -87,6 +87,7 @@ datastar = [
 story = [
 	"dep:topcoat-story",
 	"dep:topcoat-story-macro",
+	"topcoat-story/router",
 ]
 discover = [
 	"dep:inventory",

@@ -10,3 +10,9 @@
 mod registry;
 
 pub use registry::*;
+
+#[cfg(feature = "router")]
+mod gallery;
+
+#[cfg(feature = "router")]
+pub use gallery::*;
