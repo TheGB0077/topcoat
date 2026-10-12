@@ -9,6 +9,8 @@ members = [
     "crates/topcoat-core",
     "crates/topcoat-datastar",
     "crates/topcoat-story",
+    "crates/topcoat-story/grammar",
+    "crates/topcoat-story/macro",
     "crates/topcoat-core/grammar",
     "crates/topcoat-core/macro",
     "crates/topcoat-font",
@@ -125,6 +127,8 @@ topcoat-core-grammar = { version = "0.10.0", path = "crates/topcoat-core/grammar
 topcoat-core-macro = { version = "0.10.0", path = "crates/topcoat-core/macro" }
 topcoat-datastar = { version = "0.10.0", path = "crates/topcoat-datastar" }
 topcoat-story = { version = "0.10.0", path = "crates/topcoat-story" }
+topcoat-story-grammar = { version = "0.10.0", path = "crates/topcoat-story/grammar" }
+topcoat-story-macro = { version = "0.10.0", path = "crates/topcoat-story/macro" }
 topcoat-font = { version = "0.10.0", path = "crates/topcoat-font" }
 topcoat-font-grammar = { version = "0.10.0", path = "crates/topcoat-font/grammar" }
 topcoat-font-macro = { version = "0.10.0", path = "crates/topcoat-font/macro" }
