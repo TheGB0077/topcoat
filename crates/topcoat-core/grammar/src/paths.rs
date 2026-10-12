@@ -215,6 +215,10 @@ pub const topcoat_runtime: Crate = Crate::new("runtime", "topcoat-runtime", "");
 #[allow(non_upper_case_globals)]
 pub const topcoat_runtime_macro: Crate = Crate::new("runtime", "topcoat-runtime-macro", "");
 
+/// `::topcoat::story`, or `topcoat_story` standalone.
+#[allow(non_upper_case_globals)]
+pub const topcoat_story: Crate = Crate::new("story", "topcoat-story", "");
+
 /// `::topcoat::view`, or `topcoat_view` standalone.
 #[allow(non_upper_case_globals)]
 pub const topcoat_view: Crate = Crate::new("view", "topcoat-view", "");

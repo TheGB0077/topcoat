@@ -42,6 +42,8 @@ changelog_include = [
     "topcoat-core-macro",
     "topcoat-datastar",
     "topcoat-story",
+    "topcoat-story-grammar",
+    "topcoat-story-macro",
     "topcoat-font",
     "topcoat-font-grammar",
     "topcoat-font-macro",
@@ -112,6 +114,16 @@ version_group = "topcoat"
 
 [[package]]
 name = "topcoat-story"
+release = true
+version_group = "topcoat"
+
+[[package]]
+name = "topcoat-story-grammar"
+release = true
+version_group = "topcoat"
+
+[[package]]
+name = "topcoat-story-macro"
 release = true
 version_group = "topcoat"
 

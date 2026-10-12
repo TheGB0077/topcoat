@@ -86,6 +86,7 @@ datastar = [
 ]
 story = [
 	"dep:topcoat-story",
+	"dep:topcoat-story-macro",
 ]
 discover = [
 	"dep:inventory",
@@ -219,6 +220,7 @@ topcoat-core.workspace = true
 topcoat-core-macro.workspace = true
 topcoat-datastar = { workspace = true, optional = true }
 topcoat-story = { workspace = true, optional = true }
+topcoat-story-macro = { workspace = true, optional = true }
 topcoat-font = { workspace = true, optional = true }
 topcoat-font-macro = { workspace = true, optional = true }
 topcoat-htmx = { workspace = true, optional = true }

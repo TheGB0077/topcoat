@@ -9,6 +9,8 @@ members = [
     "crates/topcoat-core",
     "crates/topcoat-datastar",
     "crates/topcoat-story",
+    "crates/topcoat-story/grammar",
+    "crates/topcoat-story/macro",
     "crates/topcoat-core/grammar",
     "crates/topcoat-core/macro",
     "crates/topcoat-font",
