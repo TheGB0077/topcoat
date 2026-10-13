@@ -10,16 +10,22 @@
 
 use std::{fmt::Write as _, path::Path};
 
-use topcoat_core::{context::Cx, error::Result};
+use topcoat_asset::AssetConfig;
+use topcoat_core::{
+    context::{Cx, try_app_context},
+    error::Result,
+};
 use topcoat_router::{
     Body, HeaderValue, Method, PageFn, RouteFn, RouteFuture, RouterBuilder, content::Json,
     error::RouterErrorExt, header, path_param, request::uri, response::IntoResponse,
 };
 use topcoat_router_macro::path_param;
-use topcoat_view::{BoxView, Child, HoistView, View, internal::ThenView};
+use topcoat_runtime::{Event, Signal, signal};
+use topcoat_runtime_macro::shard;
+use topcoat_view::{BoxView, Child, HoistView, Unescaped, View, ViewExt, internal::ThenView};
 use topcoat_view_macro::{component, view};
 
-use super::{Frame, ParamKind, StoryEntry, find, stories};
+use super::{Frame, ParamKind, StoryEntry, StoryQuery, find, stories};
 
 /// Percent-encodes one URL path segment, leaving unreserved characters.
 fn encode_segment(segment: &str) -> String {
@@ -166,8 +172,8 @@ impl Toolbar {
         suffix
     }
 
-    /// The toolbar keys as hidden form pairs, for forms that submit to
-    /// the same page without losing toolbar state.
+    /// The toolbar keys as hidden form pairs, for the search form that
+    /// submits without the toolbar selects.
     fn hidden(self) -> Vec<(&'static str, &'static str)> {
         self.viewport
             .query()
@@ -175,21 +181,6 @@ impl Toolbar {
             .chain(self.bg.query())
             .collect()
     }
-}
-
-/// Query pairs that are neither toolbar keys nor the search key: the
-/// values a form carries along untouched.
-fn passthrough(query: Option<&str>, skip: &[&str]) -> Vec<(String, String)> {
-    query
-        .map(|query| {
-            query
-                .split('&')
-                .filter_map(|pair| pair.split_once('='))
-                .filter(|(key, _)| !skip.contains(key))
-                .map(|(key, value)| (key.to_owned(), value.to_owned()))
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 /// The source of the dev server's update script, when the dashboard runs
@@ -294,12 +285,18 @@ fn read_source(source_file: &str) -> Option<String> {
     None
 }
 
+/// Keeps the address bar on the live form's values without navigating.
+/// Control inputs call it on change; the shard re-render answers the
+/// state change, so this only records it for sharing.
+const SYNC_SCRIPT: &str = "function syncStoryUrl(form){var params=new URLSearchParams(new FormData(form));var query=params.toString();history.replaceState(null,'',location.pathname+(query?'?'+query:''));}";
+
 /// The dashboard shell: sidebar registry tree plus the page content.
 /// `current` is the request path, highlighting the open story. `toolbar`
 /// state rides along in sidebar links so canvas presets survive
 /// navigation, and `filter` narrows the tree to matching names.
 #[component]
 async fn shell(
+    cx: &Cx,
     title: &str,
     current: &str,
     toolbar: Toolbar,
@@ -309,6 +306,7 @@ async fn shell(
     let tree = sidebar_tree(filter.as_deref());
     let suffix = toolbar.suffix();
     let filtering = filter.is_some();
+    let live = try_app_context::<AssetConfig>(cx).is_some();
     Ok(view! {
         <!DOCTYPE html>
         <html lang="en">
@@ -322,6 +320,14 @@ async fn shell(
                 if let Some(src) = dev_script() {
                     <script src=(src)></script>
                 }
+                if live {
+                    <script
+                        type="module"
+                        src=(topcoat_runtime::SCRIPT)
+                        data-topcoat-usize-bits=(usize::BITS)
+                    ></script>
+                }
+                <script>(Unescaped::new_unchecked(SYNC_SCRIPT))</script>
             </head>
             <body
                 style="margin:0;display:flex;min-height:100vh;font-family:system-ui,sans-serif;background:#faf8f5;color:#2c221e"
@@ -469,102 +475,6 @@ async fn framed(
     })
 }
 
-/// The canvas toolbar: viewport and backdrop presets, a reset link
-/// clearing the controls, and a copy-link button. `kept` carries the
-/// current control values along as hidden inputs so toolbar changes do
-/// not reset them; `reset_url` is the canonical story URL plus toolbar
-/// state.
-#[component]
-async fn toolbar_panel(
-    current: Toolbar,
-    reset_url: String,
-    kept: Vec<(String, String)>,
-) -> Result<impl View> {
-    Ok(view! {
-        <form
-            method="get"
-            action=""
-            style="display:flex;gap:16px;align-items:flex-end;margin-bottom:16px;flex-wrap:wrap"
-        >
-            <div>
-                <div
-                    style="font-size:12px;font-weight:700;color:#8a7a6d;margin-bottom:4px"
-                >
-                    "Viewport"
-                </div>
-                <select
-                    name="viewport"
-                    onchange="this.form.submit()"
-                    style="padding:4px 8px;font-size:13px;border:1px solid #e5e0d8;border-radius:6px;background:#fff"
-                >
-                    <option value="full" selected=(current.viewport == Viewport::Full)>
-                        "Full width"
-                    </option>
-                    <option
-                        value="desktop"
-                        selected=(current.viewport == Viewport::Desktop)
-                    >
-                        "Desktop 1024"
-                    </option>
-                    <option
-                        value="tablet"
-                        selected=(current.viewport == Viewport::Tablet)
-                    >
-                        "Tablet 768"
-                    </option>
-                    <option
-                        value="mobile"
-                        selected=(current.viewport == Viewport::Mobile)
-                    >
-                        "Mobile 375"
-                    </option>
-                </select>
-            </div>
-            <div>
-                <div
-                    style="font-size:12px;font-weight:700;color:#8a7a6d;margin-bottom:4px"
-                >
-                    "Backdrop"
-                </div>
-                <select
-                    name="bg"
-                    onchange="this.form.submit()"
-                    style="padding:4px 8px;font-size:13px;border:1px solid #e5e0d8;border-radius:6px;background:#fff"
-                >
-                    <option
-                        value="default"
-                        selected=(current.bg == Background::Default)
-                    >
-                        "Frame default"
-                    </option>
-                    <option value="paper" selected=(current.bg == Background::Paper)>
-                        "Paper"
-                    </option>
-                    <option value="pine" selected=(current.bg == Background::Pine)>
-                        "Pine"
-                    </option>
-                    <option value="dark" selected=(current.bg == Background::Dark)>
-                        "Dark"
-                    </option>
-                </select>
-            </div>
-            for pair in &kept {
-                <input type="hidden" name=(pair.0.as_str()) value=(pair.1.as_str())>
-            }
-            <a href=(reset_url) style="font-size:13px;font-weight:600;color:#8a7a6d">
-                "Reset controls"
-            </a>
-            <button
-                type="button"
-                onclick="navigator.clipboard.writeText(window.location.href)"
-                style="padding:6px 12px;font-size:13px;font-weight:600;border:1px solid #e5e0d8;border-radius:6px;background:#fff;cursor:pointer"
-            >
-                "Copy link"
-            </button>
-        </form>
-    })
-}
-
 /// The human type name for a control kind, for the controls table.
 fn kind_label(kind: ParamKind) -> &'static str {
     match kind {
@@ -583,53 +493,329 @@ fn kind_options(kind: ParamKind) -> String {
     }
 }
 
-/// One control for a query key.
-#[component]
-async fn control(
-    name: &'static str,
-    kind: ParamKind,
-    current: Option<String>,
+/// One live control: the signal behind a query key.
+#[derive(Debug, Clone)]
+enum ControlSignal {
+    Text(Signal<String>),
+    Toggle(Signal<bool>),
+}
+
+/// The live region: toolbar, canvas, and controls for one story.
+///
+/// Control inputs write per-control signals, re-rendering only this
+/// shard. The story itself renders eagerly to a string inside the
+/// shard body, where the joined control query is visible through
+/// [`StoryQuery`]; stories with live regions show their first content
+/// here. A static `syncStoryUrl` call keeps the address bar on the
+/// current values; without JavaScript the form submits normally.
+#[shard]
+async fn canvas(
+    cx: &Cx,
+    group: String,
+    component: String,
+    name: String,
+    query: String,
 ) -> Result<impl View> {
-    Ok(view! {
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-            <span style="width:140px;font-size:13px;font-weight:600">(name)</span>
-            match kind {
-                ParamKind::Select(options) => {
-                    <select
-                        name=(name)
-                        onchange="this.form.submit()"
-                        style="flex:1;padding:4px 8px;font-size:13px;border:1px solid #e5e0d8;border-radius:6px;background:#fff"
-                    >
-                        for option in options {
-                            <option
-                                value=(option)
-                                selected=(current.as_deref() == Some(*option))
-                            >
-                                (option)
-                            </option>
-                        }
-                    </select>
-                }
-                ParamKind::Toggle => {
-                    <input
-                        type="checkbox"
-                        name=(name)
-                        value="true"
-                        checked=(current.as_deref() == Some("true"))
-                        onchange="this.form.submit()"
-                    >
-                }
-                ParamKind::Text => {
-                    <input
-                        type="text"
-                        name=(name)
-                        value=(current)
-                        onchange="this.form.submit()"
-                        style="flex:1;padding:4px 8px;font-size:13px;border:1px solid #e5e0d8;border-radius:6px"
-                    >
+    struct Live {
+        entry: &'static StoryEntry,
+        viewport: Signal<String>,
+        bg: Signal<String>,
+        states: Vec<ControlSignal>,
+        viewport_preset: Viewport,
+        bg_preset: Background,
+        reset_url: String,
+        rendered: String,
+    }
+
+    let live = match find(&group, &component, &name) {
+        None => None,
+        Some(entry) => {
+            let viewport = signal(&cx.keyed("toolbar:viewport"), || {
+                query_value(Some(&query), "viewport")
+                    .unwrap_or("full")
+                    .to_owned()
+            });
+            let bg = signal(&cx.keyed("toolbar:bg"), || {
+                query_value(Some(&query), "bg")
+                    .unwrap_or("default")
+                    .to_owned()
+            });
+
+            let mut states = Vec::new();
+            for param in entry.meta.params {
+                let keyed = cx.keyed(format!("control:{}", param.name));
+                match param.kind {
+                    ParamKind::Select(_) | ParamKind::Text => {
+                        let initial = query_value(Some(&query), param.name)
+                            .unwrap_or("")
+                            .to_owned();
+                        states.push(ControlSignal::Text(signal(&keyed, || initial)));
+                    }
+                    ParamKind::Toggle => {
+                        let initial = query_value(Some(&query), param.name) == Some("true");
+                        states.push(ControlSignal::Toggle(signal(&keyed, || initial)));
+                    }
                 }
             }
-        </div>
+
+            let viewport_preset = Viewport::parse(Some(&viewport.get()));
+            let bg_preset = Background::parse(Some(&bg.get()));
+
+            let mut pairs = Vec::new();
+            for (param, state) in entry.meta.params.iter().zip(&states) {
+                match state {
+                    ControlSignal::Text(value) => {
+                        let value = value.get();
+                        if !value.is_empty() {
+                            pairs.push((param.name.to_owned(), value));
+                        }
+                    }
+                    ControlSignal::Toggle(value) => {
+                        if value.get() {
+                            pairs.push((param.name.to_owned(), "true".to_owned()));
+                        }
+                    }
+                }
+            }
+            let effective = serde_urlencoded::to_string(&pairs).unwrap_or_default();
+            let reset_url = format!(
+                "{}{}",
+                story_url(entry.meta.group, entry.meta.component, entry.meta.name),
+                Toolbar {
+                    viewport: viewport_preset,
+                    bg: bg_preset,
+                }
+                .suffix()
+            );
+
+            let rendered = {
+                let scoped = cx.with(StoryQuery(effective));
+                (entry.render)(&scoped).first().await?.render(&scoped)
+            };
+
+            Some(Live {
+                entry,
+                viewport,
+                bg,
+                states,
+                viewport_preset,
+                bg_preset,
+                reset_url,
+                rendered,
+            })
+        }
+    };
+    Ok(view! {
+        cx =>
+        match live {
+            Some(
+                Live {
+                    entry,
+                    viewport,
+                    bg,
+                    states,
+                    viewport_preset,
+                    bg_preset,
+                    reset_url,
+                    rendered,
+                },
+            ) => {
+                <form method="get" action="" onsubmit="return false">
+                    <div
+                        style="display:flex;gap:16px;align-items:flex-end;margin-bottom:16px;flex-wrap:wrap"
+                    >
+                        <div>
+                            <div
+                                style="font-size:12px;font-weight:700;color:#8a7a6d;margin-bottom:4px"
+                            >
+                                "Viewport"
+                            </div>
+                            <select
+                                name="viewport"
+                                onchange="syncStoryUrl(this.form)"
+                                style="padding:4px 8px;font-size:13px;border:1px solid #e5e0d8;border-radius:6px;background:#fff"
+                                @change=$(|event: Event| viewport.set(event.target.value))
+                            >
+                                <option value="full" selected=(viewport.get() == "full")>
+                                    "Full width"
+                                </option>
+                                <option
+                                    value="desktop"
+                                    selected=(viewport.get() == "desktop")
+                                >
+                                    "Desktop 1024"
+                                </option>
+                                <option
+                                    value="tablet"
+                                    selected=(viewport.get() == "tablet")
+                                >
+                                    "Tablet 768"
+                                </option>
+                                <option
+                                    value="mobile"
+                                    selected=(viewport.get() == "mobile")
+                                >
+                                    "Mobile 375"
+                                </option>
+                            </select>
+                        </div>
+                        <div>
+                            <div
+                                style="font-size:12px;font-weight:700;color:#8a7a6d;margin-bottom:4px"
+                            >
+                                "Backdrop"
+                            </div>
+                            <select
+                                name="bg"
+                                onchange="syncStoryUrl(this.form)"
+                                style="padding:4px 8px;font-size:13px;border:1px solid #e5e0d8;border-radius:6px;background:#fff"
+                                @change=$(|event: Event| bg.set(event.target.value))
+                            >
+                                <option value="default" selected=(bg.get() == "default")>
+                                    "Frame default"
+                                </option>
+                                <option value="paper" selected=(bg.get() == "paper")>
+                                    "Paper"
+                                </option>
+                                <option value="pine" selected=(bg.get() == "pine")>
+                                    "Pine"
+                                </option>
+                                <option value="dark" selected=(bg.get() == "dark")>
+                                    "Dark"
+                                </option>
+                            </select>
+                        </div>
+                        <a
+                            href=(reset_url)
+                            style="font-size:13px;font-weight:600;color:#8a7a6d"
+                        >
+                            "Reset controls"
+                        </a>
+                        <button
+                            type="button"
+                            onclick="navigator.clipboard.writeText(window.location.href)"
+                            style="padding:6px 12px;font-size:13px;font-weight:600;border:1px solid #e5e0d8;border-radius:6px;background:#fff;cursor:pointer"
+                        >
+                            "Copy link"
+                        </button>
+                    </div>
+
+                    framed(
+                        frame: entry.meta.frame,
+                        width: viewport_preset.wrap(),
+                        backdrop: bg_preset.backdrop(),
+                        (Unescaped::new_unchecked(rendered))
+                    )
+
+                    if !entry.meta.params.is_empty() {
+                        <section style="margin-top:24px">
+                            <h2>"Controls"</h2>
+                            <table
+                                style="border-collapse:collapse;margin-bottom:16px;font-size:13px"
+                            >
+                                <tr style="text-align:left;color:#8a7a6d">
+                                    <th style="padding:4px 12px 4px 0;font-weight:600">
+                                        "Control"
+                                    </th>
+                                    <th style="padding:4px 12px 4px 0;font-weight:600">
+                                        "Type"
+                                    </th>
+                                    <th style="padding:4px 0;font-weight:600">"Values"</th>
+                                </tr>
+                                for param in entry.meta.params {
+                                    <tr style="border-top:1px solid #e5e0d8">
+                                        <td style="padding:4px 12px 4px 0;font-weight:600">
+                                            (param.name)
+                                        </td>
+                                        <td style="padding:4px 12px 4px 0;color:#8a7a6d">
+                                            (kind_label(param.kind))
+                                        </td>
+                                        <td style="padding:4px 0;color:#8a7a6d">
+                                            (kind_options(param.kind))
+                                        </td>
+                                    </tr>
+                                }
+                            </table>
+                            for (param, state) in entry.meta.params.iter().zip(states) {
+                                match state {
+                                    ControlSignal::Text(handle) => {
+                                        match param.kind {
+                                            ParamKind::Select(options) => {
+                                                <div
+                                                    style="display:flex;align-items:center;gap:8px;margin-bottom:8px"
+                                                >
+                                                    <span style="width:140px;font-size:13px;font-weight:600">
+                                                        (param.name)
+                                                    </span>
+                                                    <select
+                                                        name=(param.name)
+                                                        onchange="syncStoryUrl(this.form)"
+                                                        style="flex:1;padding:4px 8px;font-size:13px;border:1px solid #e5e0d8;border-radius:6px;background:#fff"
+                                                        @change=$(|event: Event| handle.set(event.target.value))
+                                                    >
+                                                        for option in options {
+                                                            <option
+                                                                value=(option)
+                                                                selected=(handle.get().as_str() == *option)
+                                                            >
+                                                                (option)
+                                                            </option>
+                                                        }
+                                                    </select>
+                                                </div>
+                                            }
+                                            _ => {
+                                                <div
+                                                    style="display:flex;align-items:center;gap:8px;margin-bottom:8px"
+                                                >
+                                                    <span style="width:140px;font-size:13px;font-weight:600">
+                                                        (param.name)
+                                                    </span>
+                                                    <input
+                                                        type="text"
+                                                        name=(param.name)
+                                                        value=(handle.get())
+                                                        onchange="syncStoryUrl(this.form)"
+                                                        style="flex:1;padding:4px 8px;font-size:13px;border:1px solid #e5e0d8;border-radius:6px"
+                                                        @change=$(|event: Event| handle.set(event.target.value))
+                                                    >
+                                                </div>
+                                            }
+                                        }
+                                    }
+                                    ControlSignal::Toggle(handle) => {
+                                        <div
+                                            style="display:flex;align-items:center;gap:8px;margin-bottom:8px"
+                                        >
+                                            <span style="width:140px;font-size:13px;font-weight:600">
+                                                (param.name)
+                                            </span>
+                                            <input
+                                                type="checkbox"
+                                                name=(param.name)
+                                                value="true"
+                                                checked=(handle.get())
+                                                onchange="syncStoryUrl(this.form)"
+                                                @change=$(|event: Event| handle.set(event.target.checked))
+                                            >
+                                        </div>
+                                    }
+                                }
+                            }
+                            <button
+                                type="submit"
+                                style="margin-top:8px;padding:6px 16px;font-size:13px;font-weight:700;border:1px solid #e5e0d8;border-radius:6px;background:#fff;cursor:pointer"
+                            >
+                                "Apply"
+                            </button>
+                        </section>
+                    }
+                </form>
+            }
+            None => {
+                <p>"Unknown story."</p>
+            }
+        }
     })
 }
 
@@ -671,8 +857,6 @@ fn story_page_view(cx: &Cx) -> Result<impl View> {
     let toolbar = Toolbar::parse(query.as_deref());
     let filter = query_value(query.as_deref(), "q").map(str::to_owned);
     let canonical = story_url(group, component, name);
-    let reset_url = format!("{}{}", canonical, toolbar.suffix());
-    let kept = passthrough(query.as_deref(), &["viewport", "bg", "q"]);
 
     Ok(view! {
         cx =>
@@ -692,73 +876,12 @@ fn story_page_view(cx: &Cx) -> Result<impl View> {
                 <p>(entry.meta.description)</p>
             }
 
-            toolbar_panel(current: toolbar, reset_url: reset_url, kept: kept)
-            framed(
-                frame: entry.meta.frame,
-                width: toolbar.viewport.wrap(),
-                backdrop: toolbar.bg.backdrop(),
-                ((entry.render)(cx))
+            canvas(
+                group: group.to_owned(),
+                component: component.to_owned(),
+                name: name.to_owned(),
+                query: query.unwrap_or_default()
             )
-
-            if !entry.meta.params.is_empty() {
-                <section style="margin-top:24px">
-                    <h2>"Controls"</h2>
-                    <table
-                        style="border-collapse:collapse;margin-bottom:16px;font-size:13px"
-                    >
-                        <tr style="text-align:left;color:#8a7a6d">
-                            <th style="padding:4px 12px 4px 0;font-weight:600">
-                                "Control"
-                            </th>
-                            <th style="padding:4px 12px 4px 0;font-weight:600">
-                                "Type"
-                            </th>
-                            <th style="padding:4px 0;font-weight:600">"Values"</th>
-                        </tr>
-                        for param in entry.meta.params {
-                            <tr style="border-top:1px solid #e5e0d8">
-                                <td style="padding:4px 12px 4px 0;font-weight:600">
-                                    (param.name)
-                                </td>
-                                <td style="padding:4px 12px 4px 0;color:#8a7a6d">
-                                    (kind_label(param.kind))
-                                </td>
-                                <td style="padding:4px 0;color:#8a7a6d">
-                                    (kind_options(param.kind))
-                                </td>
-                            </tr>
-                        }
-                    </table>
-                    <form method="get" action="">
-                        for pair in toolbar.hidden() {
-                            <input type="hidden" name=(pair.0) value=(pair.1)>
-                        }
-                        if query_value(query.as_deref(), "q").is_some() {
-                            <input
-                                type="hidden"
-                                name="q"
-                                value=(query_value(query.as_deref(), "q"))
-                            >
-                        }
-                        for param in entry.meta.params {
-                            control(
-                                name: param.name,
-                                kind: param.kind,
-                                current: query_value(query.as_deref(), param.name).map(
-                                    str::to_owned,
-                                )
-                            )
-                        }
-                        <button
-                            type="submit"
-                            style="margin-top:8px;padding:6px 16px;font-size:13px;font-weight:700;border:1px solid #e5e0d8;border-radius:6px;background:#fff;cursor:pointer"
-                        >
-                            "Apply"
-                        </button>
-                    </form>
-                </section>
-            }
-
             <section style="margin-top:24px">
                 <h2>"Source"</h2>
                 <p style="color:#8a7a6d;font-size:13px">(entry.meta.source_file)</p>
@@ -846,12 +969,17 @@ impl RouterBuilderDashboardExt for RouterBuilder {
                 story_page_route,
             ))
             .route(RouteFn::new(Method::GET, "/manifest.json", manifest))
+            .route(canvas)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use topcoat_view::ViewExt;
+    use topcoat_view_macro::view;
+
     use super::*;
+    use crate::{ParamDef, StoryMeta, controls};
 
     #[test]
     fn encodes_reserved_characters_in_story_urls() {
@@ -867,6 +995,63 @@ mod tests {
     fn reads_registry_sources_from_ancestor_directories() {
         let source = read_source("crates/topcoat-story/src/dashboard.rs").expect("source resolves");
         assert!(source.contains("source panel"));
+    }
+
+    /// A probe story rendering its control query, submitted straight to
+    /// the registry without the macro.
+    fn probe_render(cx: &Cx) -> BoxView<'_> {
+        #[derive(Debug, Default, serde::Deserialize)]
+        struct ProbeQuery {
+            tone: Option<String>,
+        }
+        let tone = controls::<ProbeQuery>(cx)
+            .tone
+            .unwrap_or_else(|| "plain".to_owned());
+        view! {
+            cx =>
+            <span>
+                "probe:"
+                (tone)
+            </span>
+        }
+        .boxed()
+    }
+
+    inventory::submit! {
+        StoryEntry {
+            meta: StoryMeta {
+                group: "Probe",
+                component: "Canvas",
+                name: "Query",
+                description: "",
+                frame: Frame::Padded,
+                source_file: file!(),
+                params: &[ParamDef {
+                    name: "tone",
+                    kind: ParamKind::Text,
+                }],
+            },
+            render: probe_render,
+        }
+    }
+
+    #[tokio::test]
+    async fn shard_applies_control_query() {
+        let cx = Cx::default();
+        let html = view! {
+            cx =>
+            canvas(
+                group: "Probe".to_owned(),
+                component: "Canvas".to_owned(),
+                name: "Query".to_owned(),
+                query: "tone=loud".to_owned()
+            )
+        }
+        .first()
+        .await
+        .expect("shard renders")
+        .render(&cx);
+        assert!(html.contains("probe:loud"), "{html}");
     }
 
     #[test]

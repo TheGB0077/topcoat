@@ -3,12 +3,12 @@
 use topcoat::{
     Result,
     context::Cx,
-    router::{Body, Router, query_params, request::Request, to_bytes},
-    story::{RouterBuilderDashboardExt, story},
+    router::{Body, Router, request::Request, to_bytes},
+    story::{RouterBuilderDashboardExt, controls, story},
     view::{View, component, view},
 };
 
-#[query_params]
+#[derive(Debug, Default, serde::Deserialize)]
 struct BadgeQuery {
     tone: Option<String>,
     glow: Option<bool>,
@@ -23,11 +23,9 @@ struct BadgeQuery {
 )]
 #[component]
 async fn badge_default(cx: &Cx) -> Result<impl View> {
-    let query = query_params::<BadgeQuery>(cx).ok();
-    let tone = query
-        .and_then(|query| query.tone.clone())
-        .unwrap_or_else(|| "plain".to_owned());
-    let glow = query.and_then(|query| query.glow).unwrap_or(false);
+    let query = controls::<BadgeQuery>(cx);
+    let tone = query.tone.clone().unwrap_or_else(|| "plain".to_owned());
+    let glow = query.glow.unwrap_or(false);
     Ok(view! {
         <span>
             "badge:"

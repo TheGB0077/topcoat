@@ -21,6 +21,7 @@ syn = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
 topcoat = { workspace = true, features = ["story", "view"] }
+serde = { workspace = true, features = ["derive"] }
 
 [lints]
 workspace = true

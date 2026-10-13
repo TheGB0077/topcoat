@@ -5702,11 +5702,15 @@ dependencies = [
  "inventory",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "tokio",
  "topcoat",
+ "topcoat-asset",
  "topcoat-core",
  "topcoat-router",
  "topcoat-router-macro",
+ "topcoat-runtime",
+ "topcoat-runtime-macro",
  "topcoat-view",
  "topcoat-view-macro",
 ]
@@ -5726,6 +5730,7 @@ name = "topcoat-story-macro"
 version = "0.10.0"
 dependencies = [
  "quote",
+ "serde",
  "syn 3.0.6",
  "topcoat",
  "topcoat-story-grammar",

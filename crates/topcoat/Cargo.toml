@@ -94,6 +94,8 @@ design-story = [
 	"router",
 	"view",
 	"serve",
+	"runtime",
+	"asset",
 ]
 discover = [
 	"dep:inventory",
