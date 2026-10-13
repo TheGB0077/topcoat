@@ -15,23 +15,32 @@ router = [
 	"dep:topcoat-router",
 	"dep:topcoat-router-macro",
 	"dep:topcoat-view-macro",
-	"dep:serde",
+	"dep:topcoat-runtime",
+	"dep:topcoat-runtime-macro",
+	"topcoat-runtime/router",
+	"dep:topcoat-asset",
+	"topcoat-asset/view",
 	"dep:serde_json",
 ]
 
 [dependencies]
+topcoat-asset = { workspace = true, optional = true }
 topcoat-core.workspace = true
 topcoat-view.workspace = true
 topcoat-router = { workspace = true, optional = true }
 topcoat-router-macro = { workspace = true, optional = true }
 topcoat-view-macro = { workspace = true, optional = true }
+topcoat-runtime = { workspace = true, optional = true }
+topcoat-runtime-macro = { workspace = true, optional = true }
 
 inventory.workspace = true
-serde = { workspace = true, features = ["derive"], optional = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, optional = true }
+serde_urlencoded.workspace = true
 
 [dev-dependencies]
 topcoat = { workspace = true, features = ["story", "view", "router"] }
+serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]

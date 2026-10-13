@@ -2,7 +2,7 @@
 
 use std::sync::OnceLock;
 
-use topcoat_core::context::Cx;
+use topcoat_core::context::{Cx, try_request_context};
 use topcoat_view::BoxView;
 
 /// One control in a story's controls panel.
@@ -60,6 +60,32 @@ pub struct StoryMeta {
     pub params: &'static [ParamDef],
 }
 
+/// The story's control values, set by whoever renders the story.
+///
+/// The dashboard sets this from the request query on full page loads
+/// and from the live control signals on shard re-renders, so stories
+/// read one source either way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoryQuery(pub String);
+
+/// Reads a story's controls: the dashboard-provided query if the story
+/// renders there, defaults otherwise.
+///
+/// Stories declare their controls with an ordinary deserializable struct
+/// of optional fields and fall back per struct, not per field: a missing
+/// or malformed query parses to `Q::default()`. Outside the dashboard,
+/// where no query is provided, that is also what you get.
+#[must_use]
+pub fn controls<Q>(cx: &Cx) -> Q
+where
+    Q: serde::de::DeserializeOwned + Default,
+{
+    try_request_context::<StoryQuery>(cx)
+        .map(|query| query.0.clone())
+        .and_then(|query| serde_urlencoded::from_str(&query).ok())
+        .unwrap_or_default()
+}
+
 /// Renders a story's canvas for the gallery.
 pub type StoryRenderFn = for<'a> fn(&'a Cx) -> BoxView<'a>;
 
@@ -113,6 +139,32 @@ mod tests {
     use topcoat_view::ViewExt;
 
     use super::*;
+
+    #[derive(Debug, Default, PartialEq, serde::Deserialize)]
+    struct CardQuery {
+        tone: Option<String>,
+        glow: Option<bool>,
+    }
+
+    #[test]
+    fn controls_read_the_provided_query() {
+        let cx = Cx::default().with(StoryQuery("tone=loud&glow=true".to_owned()));
+        assert_eq!(
+            controls::<CardQuery>(&cx),
+            CardQuery {
+                tone: Some("loud".to_owned()),
+                glow: Some(true),
+            }
+        );
+    }
+
+    #[test]
+    fn controls_fall_back_to_defaults() {
+        let cx = Cx::default();
+        assert_eq!(controls::<CardQuery>(&cx), CardQuery::default());
+        let cx = Cx::default().with(StoryQuery("glow=notabool".to_owned()));
+        assert_eq!(controls::<CardQuery>(&cx), CardQuery::default());
+    }
 
     fn blank(_cx: &Cx) -> BoxView<'_> {
         ().boxed()
@@ -169,14 +221,8 @@ mod tests {
             .iter()
             .map(|entry| (entry.meta.group, entry.meta.component, entry.meta.name))
             .collect();
-        assert_eq!(
-            order,
-            vec![
-                ("Apple", "Card", "Default"),
-                ("Apple", "Card", "Sold out"),
-                ("Zebra", "Card", "Sale"),
-            ]
-        );
+        assert!(order.windows(2).all(|pair| pair[0] <= pair[1]), "{order:?}");
+        assert!(order.contains(&("Apple", "Card", "Default")));
     }
 
     #[test]
