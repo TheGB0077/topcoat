@@ -76,6 +76,48 @@ async fn story_page_applies_control_values() {
 }
 
 #[tokio::test]
+async fn toolbar_presets_constrain_canvas_and_backdrop() {
+    let (status, html) = fetch(&router(), "/Shop/Badge/Default?viewport=mobile&bg=pine").await;
+    assert_eq!(status, 200, "{html}");
+    assert!(html.contains("max-width:375px"), "{html}");
+    assert!(html.contains("background:#1c2b24"), "{html}");
+}
+
+#[tokio::test]
+async fn sidebar_preserves_toolbar_and_marks_current_story() {
+    let (status, html) = fetch(&router(), "/Shop/Badge/Default?viewport=mobile").await;
+    assert_eq!(status, 200, "{html}");
+    assert!(
+        html.contains("/Shop/Badge/Default?viewport=mobile"),
+        "{html}"
+    );
+    assert!(html.contains("aria-current=\"true\""), "{html}");
+}
+
+#[tokio::test]
+async fn reset_link_clears_controls_but_keeps_toolbar() {
+    let (status, html) = fetch(&router(), "/Shop/Badge/Default?tone=loud&viewport=mobile").await;
+    assert_eq!(status, 200, "{html}");
+    assert!(
+        html.contains("/Shop/Badge/Default?viewport=mobile\""),
+        "{html}"
+    );
+    assert!(!html.contains("tone=loud&viewport"), "{html}");
+}
+
+#[tokio::test]
+async fn search_filters_sidebar_to_matching_stories() {
+    let (status, html) = fetch(&router(), "/Shop/Badge/Default?q=zzz-no-match").await;
+    assert_eq!(status, 200, "{html}");
+    // The source panel echoes this file escaped, so match the raw
+    // attribute only a real sidebar link renders.
+    assert!(!html.contains("aria-current=\"true\""), "{html}");
+    let (status, html) = fetch(&router(), "/Shop/Badge/Default?q=badge").await;
+    assert_eq!(status, 200, "{html}");
+    assert!(html.contains("aria-current=\"true\""), "{html}");
+}
+
+#[tokio::test]
 async fn unknown_story_is_not_found() {
     let (status, _) = fetch(&router(), "/Shop/Badge/Missing").await;
     assert_eq!(status, 404);
