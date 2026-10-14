@@ -5,7 +5,7 @@ components_dir = "src/components"
 [theme]
 name = "neutral"
 registry = "topcoat"
-hash = "sha256:6e451a2d3470b0ee544ccf4240da8631bad4c807a06ae0d3a1fc77154b86c3b9"
+hash = "sha256:5e370e648fef95d78c8b048d99be7f7d79fd82132f8c9cc1ce854d3b73024137"
 file = "styles.css"
 
 [registries.topcoat.components.accordion]
@@ -37,7 +37,7 @@ hash = "sha256:1b40f815a96997b28f35b8f385f5849d86ca53ba47fb752a3e795bfc24c3a55d"
 file = "src/components/button.rs"
 
 [registries.topcoat.components.card]
-hash = "sha256:63166ad6fdf41fd409b8c879231d879f90375ef225cda9dc1559151c9deae5fc"
+hash = "sha256:9c753a11ad86ad31db0c1a06584d9b1814ee1326c1e862295d508f0a7baee95d"
 file = "src/components/card.rs"
 
 [registries.topcoat.components.checkbox]
@@ -45,7 +45,7 @@ hash = "sha256:fb7cb8f77818fe9a76f62b0f705494a5e5a000de9b6a49d05cca973b028abf2d"
 file = "src/components/checkbox.rs"
 
 [registries.topcoat.components.dialog]
-hash = "sha256:4191478a84b3e35b927927624cc12e89f8ee6ca69ac1a710950d4653bbbd9c67"
+hash = "sha256:97494bc086959953eff0e1a28ba72be8268cd4c38d83b50259c13788a3931e3c"
 file = "src/components/dialog.rs"
 
 [registries.topcoat.components.dropdown_menu]
@@ -105,11 +105,11 @@ hash = "sha256:7ba5a7628128e1811e960884bd56da34f754c1d516230b4442dfbc1cb97e73e9"
 file = "src/components/separator.rs"
 
 [registries.topcoat.components.sheet]
-hash = "sha256:99e55f904044e7bf2b335ac5fefde1d4da720548cb5dc5dfdca9aa05e6b98622"
+hash = "sha256:d8774dc8c3b3276a2b57cf287b6f2e4310d59f63aa9ee006816c47c7154a2841"
 file = "src/components/sheet.rs"
 
 [registries.topcoat.components.sidebar]
-hash = "sha256:985d717cb24142801c1cfdce0664968c54a61c6c671512cbff6f3f0271daf2e8"
+hash = "sha256:4e33fba2dea60d985c73b716e28532bef15d9a7511ea9e80335a3b976e29cd38"
 file = "src/components/sidebar.rs"
 
 [registries.topcoat.components.skeleton]
@@ -125,7 +125,7 @@ hash = "sha256:ce9a0c7be3ac7187f0935c193bec82f8587953c8a85fdbaf29c08d9593365c36"
 file = "src/components/switch.rs"
 
 [registries.topcoat.components.table]
-hash = "sha256:8579ede1083af6d1c1d185110a885146e23fd8612d07d3d6d03b24b01ea523b6"
+hash = "sha256:1bb770c77662b17b71a1a2c574917b177dcaab9e5d73dae274d59405e9f02ae4"
 file = "src/components/table.rs"
 
 [registries.topcoat.components.tabs]

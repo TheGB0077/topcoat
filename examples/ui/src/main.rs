@@ -1481,10 +1481,8 @@ async fn deployments_card(cx: &Cx) -> Result<impl View> {
                 card_description("Deployment rows with badges and pagination.")
             )
             // The card pads its sections rather than itself, so the table can
-            // span its full width; the table's own padding lines the cells up
-            // with the sections above and below it.
+            // span its full width.
             table(
-                attrs: attributes! { class="px-3" },
                 table_caption("Deployments")
                 table_header(
                     table_row(
