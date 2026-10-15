@@ -27,6 +27,59 @@ fn story() {
 }
 
 #[test]
+fn story_with_fixtures() {
+    let attrs = [
+        quote! { group = "Catalog", component = "Card", name = "Sale", deal = fixtures::sale() },
+        quote! { group = "Catalog", component = "Card", name = "Full", deal = fixtures::sale(), count = 3, },
+    ];
+    for attr in attrs {
+        assert_deterministic(|| {
+            Story::parse(
+                attr.clone(),
+                quote! {
+                    async fn sale(deal: Deal, #[default] count: usize) -> Result<impl View> {
+                        Ok(view! { <p>"sale"</p> })
+                    }
+                },
+            )
+        });
+    }
+}
+
+#[test]
+fn fixtures_must_match_props() {
+    let item = quote! {
+        async fn sale(deal: Deal) -> Result<impl View> {
+            Ok(view! { <p>"sale"</p> })
+        }
+    };
+    assert!(
+        Story::parse(
+            quote! { group = "Catalog", component = "Card", name = "Missing" },
+            item.clone(),
+        )
+        .is_err(),
+        "a required prop without a fixture fails"
+    );
+    assert!(
+        Story::parse(
+            quote! { group = "Catalog", component = "Card", name = "Typo", dael = fixtures::sale() },
+            item.clone(),
+        )
+        .is_err(),
+        "a fixture without a prop fails"
+    );
+    assert!(
+        Story::parse(
+            quote! { group = "Catalog", component = "Card", name = "Ok", deal = fixtures::sale() },
+            item.clone(),
+        )
+        .is_ok(),
+        "a matching fixture passes"
+    );
+}
+
+#[test]
 fn expansion_registers_meta_in_submit() {
     let expanded = Story::parse(
         quote! { group = "Catalog", component = "Card", name = "Sale", frame = Dark, params = [select("tone", ["plain", "loud"]), toggle("glow")] },

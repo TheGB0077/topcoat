@@ -88,6 +88,30 @@ impl ToTokens for StoryParam {
     }
 }
 
+/// One fixture: a component prop value the gallery renders the story
+/// with, evaluated fresh on every render.
+pub struct StoryFixture {
+    name: Ident,
+    value: Expr,
+}
+
+impl Parse for StoryFixture {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let name: Ident = input.parse()?;
+        input.parse::<Token![=]>()?;
+        let value: Expr = input.parse()?;
+        Ok(Self { name, value })
+    }
+}
+
+impl ToTokens for StoryFixture {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let name = &self.name;
+        let value = &self.value;
+        quote! { .#name(#value) }.to_tokens(tokens);
+    }
+}
+
 /// The `#[story]` attribute: which sidebar entry the annotated function is.
 pub struct StoryAttr {
     group: LitStr,
@@ -95,6 +119,7 @@ pub struct StoryAttr {
     name: LitStr,
     frame: Option<Ident>,
     params: Vec<StoryParam>,
+    fixtures: Vec<StoryFixture>,
 }
 
 impl StoryAttr {
@@ -115,6 +140,7 @@ impl Parse for StoryAttr {
         let mut name = None;
         let mut frame = None;
         let mut params = Vec::new();
+        let mut fixtures = Vec::new();
 
         while !input.is_empty() {
             let lookahead = input.lookahead1();
@@ -169,7 +195,23 @@ impl Parse for StoryAttr {
                     }
                 }
             } else {
-                return Err(lookahead.error());
+                // Anything else must be a fixture: `name = expr`.
+                let fork = input.fork();
+                let is_fixture = fork.parse::<Ident>().is_ok() && fork.parse::<Token![=]>().is_ok();
+                if !is_fixture {
+                    return Err(lookahead.error());
+                }
+                let fixture: StoryFixture = input.parse()?;
+                if fixtures
+                    .iter()
+                    .any(|other: &StoryFixture| other.name == fixture.name)
+                {
+                    return Err(syn::Error::new(
+                        fixture.name.span(),
+                        format!("duplicate fixture for prop `{}`", fixture.name),
+                    ));
+                }
+                fixtures.push(fixture);
             }
             if input.is_empty() {
                 break;
@@ -199,6 +241,7 @@ impl Parse for StoryAttr {
             name: name.expect("name is present"),
             frame,
             params,
+            fixtures,
         })
     }
 }
@@ -265,11 +308,72 @@ impl Story {
     /// # Errors
     ///
     /// Returns an error if either token stream fails to parse as a
-    /// [`StoryAttr`] or [`StoryItem`], or if the item is not a valid story
-    /// function.
+    /// [`StoryAttr`] or [`StoryItem`], if the item is not a valid story
+    /// function, or if the fixtures do not match its props.
     pub fn parse(attr: TokenStream, item: TokenStream) -> syn::Result<Self> {
-        Ok(Self::new(syn::parse2(attr)?, syn::parse2(item)?))
+        let attr: StoryAttr = syn::parse2(attr)?;
+        let item: StoryItem = syn::parse2(item)?;
+        validate_fixtures(&attr, &item)?;
+        Ok(Self::new(attr, item))
     }
+}
+
+/// Checks the attribute's fixtures against the story function's props:
+/// every required prop needs a fixture, every fixture needs a prop, and
+/// no prop may hide behind a reserved story key.
+fn validate_fixtures(attr: &StoryAttr, item: &StoryItem) -> syn::Result<()> {
+    const RESERVED: &[&str] = &["group", "component", "name", "frame", "params"];
+
+    let mut required = Vec::new();
+    for input in &item.item.sig.inputs {
+        let syn::FnArg::Typed(typed) = input else {
+            continue;
+        };
+        let syn::Pat::Ident(prop) = &*typed.pat else {
+            continue;
+        };
+        if prop.ident == "cx" {
+            continue;
+        }
+        if RESERVED.contains(&prop.ident.to_string().as_str()) {
+            return Err(syn::Error::new_spanned(
+                &prop.ident,
+                format!("prop `{}` collides with a reserved story key", prop.ident),
+            ));
+        }
+        let defaulted = typed
+            .attrs
+            .iter()
+            .any(|attr| attr.path().is_ident("default"));
+        if !defaulted {
+            required.push(prop.ident.clone());
+        }
+    }
+
+    for prop in &required {
+        if !attr.fixtures.iter().any(|fixture| fixture.name == *prop) {
+            return Err(syn::Error::new(
+                item.item.sig.ident.span(),
+                format!("story is missing a fixture for prop `{prop}`"),
+            ));
+        }
+    }
+    for fixture in &attr.fixtures {
+        let known = item.item.sig.inputs.iter().any(|input| match input {
+            syn::FnArg::Typed(typed) => match &*typed.pat {
+                syn::Pat::Ident(prop) => prop.ident == fixture.name,
+                _ => false,
+            },
+            syn::FnArg::Receiver(_) => false,
+        });
+        if !known {
+            return Err(syn::Error::new_spanned(
+                &fixture.name,
+                format!("no such prop `{}` on the story function", fixture.name),
+            ));
+        }
+    }
+    Ok(())
 }
 
 impl ToTokens for Story {
@@ -284,6 +388,7 @@ impl ToTokens for Story {
         let frame = attr.frame();
         let description = LitStr::new(&story.description(), Span::call_site());
         let params = &attr.params;
+        let fixtures = &attr.fixtures;
 
         quote! {
             #item
@@ -295,6 +400,7 @@ impl ToTokens for Story {
                     ::std::boxed::Box::pin(#topcoat_view::HoistView::new(
                         #topcoat_view::internal::ThenView::new(async move {
                             let props = <#ident as #topcoat_view::Component>::props_builder()
+                                #(#fixtures)*
                                 .build();
                             <#ident as #topcoat_view::Component>::render(#ident, cx, props).await
                         }),
