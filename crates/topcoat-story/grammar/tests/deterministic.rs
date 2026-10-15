@@ -25,6 +25,11 @@ fn story() {
             Ok(view! { <p>"sale"</p> })
         }
     };
+    let optional = quote! {
+        async fn sale(align: Option<&str>, count: Option<u32>) -> Result<impl View> {
+            Ok(view! { <p>"sale"</p> })
+        }
+    };
     let cases = [
         (
             quote! { group = "Catalog", component = "Card", name = "Default" },
@@ -49,6 +54,10 @@ fn story() {
         (
             quote! { group = "Catalog", component = "Card", name = "World", params = [global("locale", ["en", "pt"])], fixtures = [locale = "en".to_owned()] },
             world,
+        ),
+        (
+            quote! { group = "Catalog", component = "Card", name = "Aligned", params = [select("align", ["left", "center"]), select("count", ["1", "4"])], fixtures = [align = None, count = Some(2)] },
+            optional,
         ),
     ];
     for (attr, item) in cases {
@@ -106,6 +115,18 @@ fn fixtures_must_match_props() {
         )
         .is_ok(),
         "a matching fixture passes"
+    );
+    assert!(
+        Story::parse(
+            quote! { group = "Catalog", component = "Card", name = "Kids" },
+            quote! {
+                async fn sale(child: Child<'_>) -> Result<impl View> {
+                    Ok(view! { <p>"sale"</p> })
+                }
+            },
+        )
+        .is_err(),
+        "a required child points at a wrapper story"
     );
     assert!(
         Story::parse(
