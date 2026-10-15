@@ -69,17 +69,24 @@ async fn index_lists_registered_stories() {
 async fn story_page_renders_canvas_controls_and_source() {
     let (status, html) = fetch(&router(), "/Shop/Badge/Default").await;
     assert_eq!(status, 200, "{html}");
-    assert!(html.contains("badge:plain false"), "{html}");
+    assert!(html.contains("<iframe"), "{html}");
+    assert!(html.contains("?embed=1"), "{html}");
     assert!(html.contains("tone"), "{html}");
     assert!(html.contains("glow"), "{html}");
     assert!(html.contains("async fn badge_default"), "{html}");
+    let (status, html) = fetch(&router(), "/Shop/Badge/Default?embed=1").await;
+    assert_eq!(status, 200, "{html}");
+    assert!(html.contains("badge:plain false"), "{html}");
 }
 
 #[tokio::test]
 async fn story_page_applies_control_values() {
-    let (status, html) = fetch(&router(), "/Shop/Badge/Default?tone=loud&glow=true").await;
+    let (status, html) = fetch(&router(), "/Shop/Badge/Default?embed=1&tone=loud&glow=true").await;
     assert_eq!(status, 200, "{html}");
     assert!(html.contains("badge:loud true"), "{html}");
+    let (status, html) = fetch(&router(), "/Shop/Badge/Default?tone=loud").await;
+    assert_eq!(status, 200, "{html}");
+    assert!(html.contains("?embed=1&amp;tone=loud"), "{html}");
 }
 
 #[tokio::test]
@@ -128,6 +135,21 @@ async fn search_filters_sidebar_to_matching_stories() {
 async fn unknown_story_is_not_found() {
     let (status, _) = fetch(&router(), "/Shop/Badge/Missing").await;
     assert_eq!(status, 404);
+    let (status, _) = fetch(&router(), "/Shop/Badge/Missing?embed=1").await;
+    assert_eq!(status, 404);
+}
+
+#[tokio::test]
+async fn embed_page_renders_story_without_dashboard_chrome() {
+    let (status, html) = fetch(
+        &router(),
+        "/Shop/Badge/Default?embed=1&viewport=mobile&bg=pine",
+    )
+    .await;
+    assert_eq!(status, 200, "{html}");
+    assert!(html.contains("badge:plain false"), "{html}");
+    assert!(html.contains("width=device-width"), "{html}");
+    assert!(!html.contains("Search stories"), "{html}");
 }
 
 #[tokio::test]
@@ -135,15 +157,18 @@ async fn manifest_lists_story_urls() {
     let (status, html) = fetch(&router(), "/manifest.json").await;
     assert_eq!(status, 200, "{html}");
     assert!(html.contains("/Shop/Badge/Default"), "{html}");
+    assert!(html.contains("?embed=1"), "{html}");
 }
 
 #[tokio::test]
 async fn global_toolbar_switches_declared_locales() {
     let (status, html) = fetch(&router(), "/Shop/Badge/Localized").await;
     assert_eq!(status, 200, "{html}");
-    assert!(html.contains(">hello en<"), "{html}");
     assert!(html.contains("name=\"locale\""), "{html}");
-    let (status, html) = fetch(&router(), "/Shop/Badge/Localized?locale=pt").await;
+    let (status, html) = fetch(&router(), "/Shop/Badge/Localized?embed=1").await;
+    assert_eq!(status, 200, "{html}");
+    assert!(html.contains(">hello en<"), "{html}");
+    let (status, html) = fetch(&router(), "/Shop/Badge/Localized?embed=1&locale=pt").await;
     assert_eq!(status, 200, "{html}");
     assert!(html.contains(">hello pt<"), "{html}");
     assert!(!html.contains(">hello en<"), "{html}");
