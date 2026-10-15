@@ -19,7 +19,8 @@ impl BundledAsset {
     }
 
     /// The filename encoded as a single URL path segment.
-    pub(crate) fn encoded_name(&self) -> PercentEncode<'_> {
+    #[must_use]
+    pub fn encoded_name(&self) -> PercentEncode<'_> {
         utf8_percent_encode(self.name(), FILENAME)
     }
 

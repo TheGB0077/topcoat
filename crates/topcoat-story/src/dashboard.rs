@@ -22,7 +22,7 @@ use topcoat_router::{
 use topcoat_router_macro::path_param;
 use topcoat_runtime::{Event, Signal, signal};
 use topcoat_runtime_macro::shard;
-use topcoat_view::{BoxView, Child, HoistView, Unescaped, View, internal::ThenView};
+use topcoat_view::{BoxView, Child, HoistView, Unescaped, View, ViewExt, internal::ThenView};
 use topcoat_view_macro::{component, view};
 
 use super::{Frame, ParamKind, StoryEntry, find, query_value, stories};
@@ -82,6 +82,24 @@ impl Viewport {
             Self::Desktop => Some("max-width:1024px;margin:0 auto"),
             Self::Tablet => Some("max-width:768px;margin:0 auto"),
             Self::Mobile => Some("max-width:375px;margin:0 auto"),
+        }
+    }
+
+    /// The canvas iframe's own style: full width up to the preset, so
+    /// viewport media queries inside see a device-width viewport.
+    /// The fixed height is corrected to the content height on load.
+    fn iframe_style(self) -> &'static str {
+        match self {
+            Self::Full => "width:100%;height:600px;border:0;display:block",
+            Self::Desktop => {
+                "width:100%;max-width:1024px;height:600px;margin:0 auto;border:0;display:block"
+            }
+            Self::Tablet => {
+                "width:100%;max-width:768px;height:600px;margin:0 auto;border:0;display:block"
+            }
+            Self::Mobile => {
+                "width:100%;max-width:375px;height:600px;margin:0 auto;border:0;display:block"
+            }
         }
     }
 
@@ -328,6 +346,33 @@ fn read_source(source_file: &str) -> Option<String> {
     None
 }
 
+/// Whether a bundled filename is the generated Tailwind stylesheet.
+///
+/// Tailwind's build writes `tailwind.css` by default, which the bundler
+/// stores as `tailwind-<hash>.css`. Custom output names are not found.
+fn is_tailwind_stylesheet(name: &str) -> bool {
+    let stem = name.starts_with("tailwind");
+    let css = Path::new(name).extension().is_some_and(|ext| ext == "css");
+    stem && css
+}
+
+/// The application's Tailwind stylesheet URL, when the app bundles one.
+///
+/// Stories render inside the dashboard shell, so the shell links the
+/// app's own stylesheet and story markup gets production styling. The
+/// dashboard chrome itself keeps inline styles.
+fn tailwind_stylesheet(config: &AssetConfig) -> Option<String> {
+    let stylesheet = config
+        .catalog()
+        .assets()
+        .find(|asset| is_tailwind_stylesheet(asset.name()))?;
+    Some(format!(
+        "{}/{}",
+        config.base_url(),
+        stylesheet.encoded_name()
+    ))
+}
+
 /// Keeps the address bar on the live form's values without navigating.
 /// Control inputs call it on change; the shard re-render answers the
 /// state change, so this only records it for sharing.
@@ -350,7 +395,9 @@ async fn shell(
     let tree = sidebar_tree(filter.as_deref());
     let suffix = preserved_suffix(query.as_deref());
     let filtering = filter.as_deref().is_some_and(|filter| !filter.is_empty());
-    let live = try_app_context::<AssetConfig>(cx).is_some();
+    let assets = try_app_context::<AssetConfig>(cx);
+    let live = assets.is_some();
+    let stylesheet = assets.and_then(tailwind_stylesheet);
     Ok(view! {
         <!DOCTYPE html>
         <html lang="en">
@@ -361,6 +408,9 @@ async fn shell(
                     (title)
                     " — designbook"
                 </title>
+                if let Some(href) = stylesheet {
+                    <link rel="stylesheet" href=(href)>
+                }
                 if let Some(src) = dev_script() {
                     <script src=(src)></script>
                 }
@@ -471,7 +521,9 @@ fn url_story_part(url: &str) -> &str {
     url.split('?').next().unwrap_or(url)
 }
 
-/// The frame's own wrapper, without toolbar overrides.
+/// The frame's own wrapper, without toolbar overrides. The isolated
+/// canvas is already at the story's width, so bleed and bare both
+/// render edge to edge.
 #[component]
 async fn frame_body(frame: Frame, #[default] child: Child<'_>) -> Result<impl View> {
     Ok(view! {
@@ -483,41 +535,15 @@ async fn frame_body(frame: Frame, #[default] child: Child<'_>) -> Result<impl Vi
                     (child)
                 </div>
             }
-            Frame::Bare => {
-                <div>(child)</div>
-            }
             Frame::Dark => {
                 <div style="background:#1c2b24;border-radius:12px;padding:24px">
                     (child)
                 </div>
             }
-            Frame::FullBleed => {
-                <div style="margin:0 -24px">(child)</div>
+            Frame::Bare | Frame::FullBleed => {
+                <div>(child)</div>
             }
         }
-    })
-}
-
-/// Frames a story canvas per its frame choice, inside the toolbar's
-/// width constraint and backdrop override.
-#[component]
-async fn framed(
-    frame: Frame,
-    width: Option<&'static str>,
-    backdrop: Option<&'static str>,
-    #[default] child: Child<'_>,
-) -> Result<impl View> {
-    Ok(view! {
-        <div style=(width)>
-            match backdrop {
-                Some(backdrop) => {
-                    <div style=(backdrop)>frame_body(frame: frame, (child))</div>
-                }
-                None => {
-                    frame_body(frame: frame, (child))
-                }
-            }
-        </div>
     })
 }
 
@@ -550,11 +576,12 @@ enum ControlSignal {
 /// The live region: toolbar, canvas, and controls for one story.
 ///
 /// Control inputs write per-control signals, re-rendering only this
-/// shard. The story itself renders eagerly to a string inside the
-/// shard body, where the joined control query is visible through
-/// [`StoryQuery`]; stories with live regions show their first content
-/// here. A static `syncStoryUrl` call keeps the address bar on the
-/// current values; without JavaScript the form submits normally.
+/// shard. The story itself renders isolated in an iframe at the
+/// viewport preset's width, so viewport media queries see a
+/// device-width viewport instead of a narrowed dashboard column; knob
+/// changes reload the frame through its live `src`. A static
+/// `syncStoryUrl` call keeps the address bar on the current values;
+/// without JavaScript the form submits normally.
 #[shard]
 async fn canvas(
     cx: &Cx,
@@ -563,7 +590,7 @@ async fn canvas(
     name: String,
     query: String,
 ) -> Result<impl View> {
-    struct Live<'a> {
+    struct Live {
         entry: &'static StoryEntry,
         viewport: Signal<String>,
         bg: Signal<String>,
@@ -571,9 +598,9 @@ async fn canvas(
         viewport_preset: Viewport,
         bg_preset: Background,
         reset_url: String,
+        embed_src: String,
         globals_carry: Vec<(String, String)>,
         carry_over: Vec<(String, String)>,
-        rendered: BoxView<'a>,
     }
 
     let live = match find(&group, &component, &name) {
@@ -621,14 +648,11 @@ async fn canvas(
                     }
                 }
             }
-            let effective = serde_urlencoded::to_string(&pairs).unwrap_or_default();
             let reset_url = format!(
                 "{}{}",
                 story_url(entry.meta.group, entry.meta.component, entry.meta.name),
                 preserved_suffix(Some(&query)),
             );
-
-            let rendered = (entry.render)(cx, effective).await?;
 
             let global_keys: Vec<&str> =
                 supported_globals().iter().map(|global| global.0).collect();
@@ -636,6 +660,30 @@ async fn canvas(
             let mut live_skip = vec!["viewport", "bg"];
             live_skip.extend(entry.meta.params.iter().map(|param| param.name));
             let carry_over = carry(Some(&query), &live_skip);
+
+            let mut embed_src = format!(
+                "{}?embed=1",
+                story_url(entry.meta.group, entry.meta.component, entry.meta.name),
+            );
+            let mut state = Vec::new();
+            state.extend(
+                viewport_preset
+                    .query()
+                    .map(|(key, value)| (key.to_owned(), value.to_owned())),
+            );
+            state.extend(
+                bg_preset
+                    .query()
+                    .map(|(key, value)| (key.to_owned(), value.to_owned())),
+            );
+            state.extend(pairs.iter().cloned());
+            state.extend(carry_over.iter().filter(|(key, _)| key != "q").cloned());
+            for (key, value) in &state {
+                embed_src.push('&');
+                embed_src.push_str(&encode_segment(key));
+                embed_src.push('=');
+                embed_src.push_str(&encode_segment(value));
+            }
 
             Some(Live {
                 entry,
@@ -645,9 +693,9 @@ async fn canvas(
                 viewport_preset,
                 bg_preset,
                 reset_url,
+                embed_src,
                 globals_carry,
                 carry_over,
-                rendered,
             })
         }
     };
@@ -663,9 +711,9 @@ async fn canvas(
                     viewport_preset,
                     bg_preset,
                     reset_url,
+                    embed_src,
                     globals_carry,
                     carry_over,
-                    rendered,
                 },
             ) => {
                 if !supported_globals().is_empty() {
@@ -784,14 +832,25 @@ async fn canvas(
                         >
                             "Copy link"
                         </button>
+                        <a
+                            href=(embed_src.clone())
+                            target="_blank"
+                            style="font-size:13px;font-weight:600;color:#8a7a6d"
+                        >
+                            "Open isolated"
+                        </a>
                     </div>
 
-                    framed(
-                        frame: entry.meta.frame,
-                        width: viewport_preset.wrap(),
-                        backdrop: bg_preset.backdrop(),
-                        (rendered)
-                    )
+                    <div style=(viewport_preset.wrap())>
+                        <div style=(bg_preset.backdrop())>
+                            <iframe
+                                title=(entry.meta.name)
+                                src=(embed_src)
+                                style=(viewport_preset.iframe_style())
+                                onload="this.style.height=this.contentDocument.body.scrollHeight+'px'"
+                            ></iframe>
+                        </div>
+                    </div>
 
                     if !entry.meta.params.is_empty() {
                         <section style="margin-top:24px">
@@ -982,6 +1041,67 @@ fn story_page_view(cx: &Cx) -> Result<impl View> {
     })
 }
 
+/// One story rendered standalone for the canvas iframe and real-device
+/// testing: the story in its frame, without dashboard chrome. Toolbar
+/// presets stay dashboard canvas chrome, so only control and global
+/// values cross over, read from the same query keys.
+async fn embed_view(cx: &Cx) -> Result<impl View> {
+    let group = path_param::<Group>(cx);
+    let component = path_param::<Component>(cx);
+    let name = path_param::<StoryName>(cx);
+    let entry: &'static StoryEntry = find(group, component, name).ok_or_not_found()?;
+    let query = uri(cx).query().unwrap_or_default();
+    let mut pairs = Vec::new();
+    for param in entry.meta.params {
+        match param.kind {
+            ParamKind::Select(_) | ParamKind::Global(_) | ParamKind::Text => {
+                if let Some(value) = query_value(Some(query), param.name)
+                    && !value.is_empty()
+                {
+                    pairs.push((param.name.to_owned(), value));
+                }
+            }
+            ParamKind::Toggle => {
+                if query_value(Some(query), param.name).as_deref() == Some("true") {
+                    pairs.push((param.name.to_owned(), "true".to_owned()));
+                }
+            }
+        }
+    }
+    let effective = serde_urlencoded::to_string(&pairs).unwrap_or_default();
+    let rendered = (entry.render)(cx, effective).await?;
+    let assets = try_app_context::<AssetConfig>(cx);
+    let stylesheet = assets.and_then(tailwind_stylesheet);
+    let live = assets.is_some();
+    Ok(view! {
+        cx =>
+        <!DOCTYPE html>
+        <html lang="en">
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <title>(entry.meta.name)</title>
+                if let Some(src) = dev_script() {
+                    <script src=(src)></script>
+                }
+                if let Some(href) = stylesheet {
+                    <link rel="stylesheet" href=(href)>
+                }
+                if live {
+                    <script
+                        type="module"
+                        src=(topcoat_runtime::SCRIPT)
+                        data-topcoat-usize-bits=(usize::BITS)
+                    ></script>
+                }
+            </head>
+            <body style="margin:0">
+                frame_body(frame: entry.meta.frame, (rendered))
+            </body>
+        </html>
+    })
+}
+
 /// One manifest row: a story's identity and canonical URL.
 #[cfg_attr(docsrs, doc(cfg(feature = "router")))]
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -994,6 +1114,9 @@ pub struct ManifestEntry {
     pub name: &'static str,
     /// Canonical dashboard URL: the URL is the saved state.
     pub url: String,
+    /// The same story without dashboard chrome, for snapshot and pixel
+    /// test runners.
+    pub embed_url: String,
 }
 
 /// `GET /manifest.json` — every story URL, for snapshot and pixel test
@@ -1007,6 +1130,10 @@ fn manifest(cx: &Cx, _body: Body) -> RouteFuture<'_> {
                 component: entry.meta.component,
                 name: entry.meta.name,
                 url: story_url(entry.meta.group, entry.meta.component, entry.meta.name),
+                embed_url: format!(
+                    "{}?embed=1",
+                    story_url(entry.meta.group, entry.meta.component, entry.meta.name),
+                ),
             })
             .collect();
         Json(entries).into_response(cx)
@@ -1024,16 +1151,27 @@ fn index_page(cx: &Cx, _body: Body) -> BoxView<'_> {
     page(async move { Ok(index_view(cx)) })
 }
 
-/// `GET /{group}/{component}/{story}` — one story.
+/// `GET /{group}/{component}/{story}` — one story, or its standalone
+/// rendering with `?embed=1`.
 fn story_page_route(cx: &Cx, _body: Body) -> BoxView<'_> {
-    page(async move { story_page_view(cx) })
+    page(async move {
+        let embed = uri(cx)
+            .query()
+            .is_some_and(|query| query_value(Some(query), "embed").is_some());
+        if embed {
+            Ok(embed_view(cx).await?.boxed())
+        } else {
+            Ok(story_page_view(cx)?.boxed())
+        }
+    })
 }
 
 /// Registers the story dashboard's routes on a router builder.
 ///
 /// The routes sit at the root of the router they are registered on: the
-/// index at `/`, one page per story at `/{group}/{component}/{story}`, and
-/// the story manifest at `/manifest.json`.
+/// index at `/`, one page per story at `/{group}/{component}/{story}`,
+/// and the story manifest at `/manifest.json`. Each story page renders
+/// standalone with `?embed=1`, which is also the canvas iframe's source.
 pub trait RouterBuilderDashboardExt {
     /// Registers the dashboard's routes.
     #[must_use]
@@ -1103,7 +1241,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shard_applies_control_query() {
+    async fn shard_points_canvas_at_isolated_story() {
         let cx = Cx::default();
         let html = view! {
             cx =>
@@ -1118,7 +1256,24 @@ mod tests {
         .await
         .expect("shard renders")
         .render(&cx);
-        assert!(html.contains(">probe<"), "{html}");
+        assert!(html.contains("<iframe"), "{html}");
+        assert!(
+            html.contains("/Probe/Canvas/Query?embed=1&amp;tone=loud"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn iframe_styles_constrain_width_per_preset() {
+        assert!(!Viewport::Full.iframe_style().contains("max-width"));
+        assert!(Viewport::Full.iframe_style().starts_with("width:100%"));
+        assert!(
+            Viewport::Desktop
+                .iframe_style()
+                .contains("max-width:1024px")
+        );
+        assert!(Viewport::Tablet.iframe_style().contains("max-width:768px"));
+        assert!(Viewport::Mobile.iframe_style().contains("max-width:375px"));
     }
 
     inventory::submit! {
@@ -1193,5 +1348,13 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].name, "Zebra");
         assert!(sidebar_tree(Some("nothing matches this")).is_empty());
+    }
+
+    #[test]
+    fn tailwind_match_keeps_generated_output_only() {
+        assert!(is_tailwind_stylesheet("tailwind-a1b2c3d4e5f60718.css"));
+        assert!(!is_tailwind_stylesheet("app-a1b2c3d4e5f60718.css"));
+        assert!(!is_tailwind_stylesheet("tailwind.config.js"));
+        assert!(!is_tailwind_stylesheet("my-tailwind-a1b2c3d4e5f60718.css"));
     }
 }
