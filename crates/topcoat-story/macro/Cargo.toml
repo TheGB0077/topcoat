@@ -13,6 +13,9 @@ rust-version.workspace = true
 [lib]
 proc-macro = true
 
+[features]
+collect = ["topcoat-story-grammar/collect"]
+
 [dependencies]
 topcoat-story-grammar.workspace = true
 
@@ -21,6 +24,7 @@ syn = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
 topcoat = { workspace = true, features = ["story", "view"] }
+topcoat-story-grammar = { workspace = true, features = ["collect"] }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 

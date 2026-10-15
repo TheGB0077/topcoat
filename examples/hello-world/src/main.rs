@@ -27,6 +27,16 @@ async fn home() -> Result<impl View> {
     })
 }
 
+/// Says hello to whoever is passed, defaulting to the fixture.
+/// The `name` control writes the `?name=` query key, which the macro
+/// wires straight into the prop.
+#[story(
+    group = "Grouping",
+    component = "Hello World",
+    name = "Test Component 2",
+    params = [text("name")],
+    fixtures = [name = "World"]
+)]
 #[component]
 async fn hello(name: &str) -> Result<impl View> {
     Ok(view! {
@@ -38,9 +48,9 @@ async fn hello(name: &str) -> Result<impl View> {
     })
 }
 
-/// Says hello to nobody in particular.
-#[story(group = "Smoke", component = "Hello", name = "Default")]
+/// A Test for the story command.
+#[story(group = "Grouping", component = "Hello", name = "Test Component")]
 #[component]
 async fn hello_default() -> Result<impl View> {
-    Ok(view! { <p>"smoke story"</p> })
+    Ok(view! { <p>"Test story!"</p> })
 }

@@ -2,17 +2,10 @@
 
 use topcoat::{
     Result,
-    context::Cx,
     router::{Body, Router, request::Request, to_bytes},
-    story::{RouterBuilderDashboardExt, controls, story},
+    story::{RouterBuilderDashboardExt, story},
     view::{View, component, view},
 };
-
-#[derive(Debug, Default, serde::Deserialize)]
-struct BadgeQuery {
-    tone: Option<String>,
-    glow: Option<bool>,
-}
 
 /// A plain card.
 #[story(
@@ -20,18 +13,34 @@ struct BadgeQuery {
     component = "Badge",
     name = "Default",
     params = [select("tone", ["plain", "loud"]), toggle("glow")],
+    fixtures = [tone = "plain".to_owned()],
 )]
 #[component]
-async fn badge_default(cx: &Cx) -> Result<impl View> {
-    let query = controls::<BadgeQuery>(cx);
-    let tone = query.tone.clone().unwrap_or_else(|| "plain".to_owned());
-    let glow = query.glow.unwrap_or(false);
+async fn badge_default(tone: String, glow: bool) -> Result<impl View> {
     Ok(view! {
         <span>
             "badge:"
             (tone)
             " "
             (glow)
+        </span>
+    })
+}
+
+/// A greeting in the toolbar locale.
+#[story(
+    group = "Shop",
+    component = "Badge",
+    name = "Localized",
+    params = [global("locale", ["en", "pt"])],
+    fixtures = [locale = "en".to_owned()],
+)]
+#[component]
+async fn badge_localized(locale: String) -> Result<impl View> {
+    Ok(view! {
+        <span>
+            "hello "
+            (locale)
         </span>
     })
 }
@@ -126,4 +135,24 @@ async fn manifest_lists_story_urls() {
     let (status, html) = fetch(&router(), "/manifest.json").await;
     assert_eq!(status, 200, "{html}");
     assert!(html.contains("/Shop/Badge/Default"), "{html}");
+}
+
+#[tokio::test]
+async fn global_toolbar_switches_declared_locales() {
+    let (status, html) = fetch(&router(), "/Shop/Badge/Localized").await;
+    assert_eq!(status, 200, "{html}");
+    assert!(html.contains(">hello en<"), "{html}");
+    assert!(html.contains("name=\"locale\""), "{html}");
+    let (status, html) = fetch(&router(), "/Shop/Badge/Localized?locale=pt").await;
+    assert_eq!(status, 200, "{html}");
+    assert!(html.contains(">hello pt<"), "{html}");
+    assert!(!html.contains(">hello en<"), "{html}");
+}
+
+#[tokio::test]
+async fn navigation_preserves_global_values() {
+    let (status, html) = fetch(&router(), "/Shop/Badge/Localized?locale=pt").await;
+    assert_eq!(status, 200, "{html}");
+    assert!(html.contains("/Shop/Badge/Default?locale=pt"), "{html}");
+    assert!(html.contains("/Shop/Badge/Localized?locale=pt\""), "{html}");
 }

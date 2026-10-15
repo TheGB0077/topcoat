@@ -15,6 +15,7 @@ mod kw {
     syn::custom_keyword!(name);
     syn::custom_keyword!(frame);
     syn::custom_keyword!(params);
+    syn::custom_keyword!(fixtures);
 }
 
 /// One control in the story's controls panel: a query key with its widget.
@@ -34,10 +35,10 @@ impl StoryParam {
 impl Parse for StoryParam {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let kind: Ident = input.parse()?;
-        if kind != "select" && kind != "toggle" && kind != "text" {
+        if kind != "select" && kind != "toggle" && kind != "text" && kind != "global" {
             return Err(syn::Error::new_spanned(
                 &kind,
-                "expected select, toggle, or text",
+                "expected select, toggle, text, or global",
             ));
         }
         let content;
@@ -56,13 +57,13 @@ impl Parse for StoryParam {
                 options_content.parse::<Token![,]>()?;
             }
         }
-        if kind == "select" && options.is_empty() {
+        if (kind == "select" || kind == "global") && options.is_empty() {
             return Err(syn::Error::new_spanned(
                 &kind,
-                "select needs at least one option",
+                format!("{kind} needs at least one option"),
             ));
         }
-        if kind != "select" && !options.is_empty() {
+        if kind != "select" && kind != "global" && !options.is_empty() {
             return Err(syn::Error::new_spanned(&kind, "only select takes options"));
         }
         Ok(Self {
@@ -79,6 +80,9 @@ impl ToTokens for StoryParam {
         let kind = if self.kind == "select" {
             let options = &self.options;
             quote! { #topcoat_story::ParamKind::Select(&[#(#options),*]) }
+        } else if self.kind == "global" {
+            let options = &self.options;
+            quote! { #topcoat_story::ParamKind::Global(&[#(#options),*]) }
         } else if self.kind == "toggle" {
             quote! { #topcoat_story::ParamKind::Toggle }
         } else {
@@ -194,24 +198,30 @@ impl Parse for StoryAttr {
                         ));
                     }
                 }
+            } else if lookahead.peek(kw::fixtures) {
+                input.parse::<kw::fixtures>()?;
+                input.parse::<Token![=]>()?;
+                let content;
+                syn::bracketed!(content in input);
+                while !content.is_empty() {
+                    let fixture: StoryFixture = content.parse()?;
+                    if fixtures
+                        .iter()
+                        .any(|other: &StoryFixture| other.name == fixture.name)
+                    {
+                        return Err(syn::Error::new(
+                            fixture.name.span(),
+                            format!("duplicate fixture for prop `{}`", fixture.name),
+                        ));
+                    }
+                    fixtures.push(fixture);
+                    if content.is_empty() {
+                        break;
+                    }
+                    content.parse::<Token![,]>()?;
+                }
             } else {
-                // Anything else must be a fixture: `name = expr`.
-                let fork = input.fork();
-                let is_fixture = fork.parse::<Ident>().is_ok() && fork.parse::<Token![=]>().is_ok();
-                if !is_fixture {
-                    return Err(lookahead.error());
-                }
-                let fixture: StoryFixture = input.parse()?;
-                if fixtures
-                    .iter()
-                    .any(|other: &StoryFixture| other.name == fixture.name)
-                {
-                    return Err(syn::Error::new(
-                        fixture.name.span(),
-                        format!("duplicate fixture for prop `{}`", fixture.name),
-                    ));
-                }
-                fixtures.push(fixture);
+                return Err(lookahead.error());
             }
             if input.is_empty() {
                 break;
@@ -295,12 +305,12 @@ impl Parse for StoryItem {
     }
 }
 
-pub struct Story(StoryAttr, StoryItem);
+pub struct Story(StoryAttr, StoryItem, Vec<PropPlan>);
 
 impl Story {
     #[must_use]
-    pub fn new(attr: StoryAttr, item: StoryItem) -> Self {
-        Self(attr, item)
+    pub(crate) fn new(attr: StoryAttr, item: StoryItem, plans: Vec<PropPlan>) -> Self {
+        Self(attr, item, plans)
     }
 
     /// Parses a story attribute and item from token streams.
@@ -309,22 +319,95 @@ impl Story {
     ///
     /// Returns an error if either token stream fails to parse as a
     /// [`StoryAttr`] or [`StoryItem`], if the item is not a valid story
-    /// function, or if the fixtures do not match its props.
+    /// function, or if the fixtures and controls do not match its props.
     pub fn parse(attr: TokenStream, item: TokenStream) -> syn::Result<Self> {
         let attr: StoryAttr = syn::parse2(attr)?;
         let item: StoryItem = syn::parse2(item)?;
-        validate_fixtures(&attr, &item)?;
-        Ok(Self::new(attr, item))
+        let plans = plan_props(&attr, &item)?;
+        Ok(Self::new(attr, item, plans))
     }
 }
 
-/// Checks the attribute's fixtures against the story function's props:
-/// every required prop needs a fixture, every fixture needs a prop, and
-/// no prop may hide behind a reserved story key.
-fn validate_fixtures(attr: &StoryAttr, item: &StoryItem) -> syn::Result<()> {
-    const RESERVED: &[&str] = &["group", "component", "name", "frame", "params"];
+/// How a control value converts into a component prop.
+enum WireType {
+    Str,
+    String,
+    Bool,
+    Int(Ident),
+    Float(Ident),
+    Skip,
+}
 
-    let mut required = Vec::new();
+/// Maps a prop type to its control conversion, if one exists.
+fn wire_type(ty: &syn::Type) -> WireType {
+    match ty {
+        syn::Type::Path(path) if path.qself.is_none() => {
+            let Some(segment) = path.path.segments.last() else {
+                return WireType::Skip;
+            };
+            if !matches!(segment.arguments, syn::PathArguments::None) {
+                return WireType::Skip;
+            }
+            match segment.ident.to_string().as_str() {
+                "String" => WireType::String,
+                "bool" => WireType::Bool,
+                "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
+                | "u128" | "usize" => WireType::Int(segment.ident.clone()),
+                "f32" | "f64" => WireType::Float(segment.ident.clone()),
+                _ => WireType::Skip,
+            }
+        }
+        syn::Type::Reference(reference) if reference.mutability.is_none() => {
+            match &*reference.elem {
+                syn::Type::Path(path)
+                    if path.qself.is_none()
+                        && path.path.segments.last().is_some_and(|segment| {
+                            segment.ident == "str"
+                                && matches!(segment.arguments, syn::PathArguments::None)
+                        }) =>
+                {
+                    WireType::Str
+                }
+                _ => WireType::Skip,
+            }
+        }
+        _ => WireType::Skip,
+    }
+}
+
+/// One prop's wiring: its fixture, and its control when a matching knob
+/// feeds it.
+pub(crate) struct PropPlan {
+    name: Ident,
+    wire: WireType,
+    fixture: Option<Expr>,
+    control: Option<Ident>,
+}
+
+/// Plans every prop from the signature, the fixtures, and the controls.
+/// Controls must name a prop they can drive; every other prop needs a
+/// fixture unless the builder defaults it.
+fn plan_props(attr: &StoryAttr, item: &StoryItem) -> syn::Result<Vec<PropPlan>> {
+    for param in &attr.params {
+        let controlled = item.item.sig.inputs.iter().any(|input| match input {
+            syn::FnArg::Typed(typed) => match &*typed.pat {
+                syn::Pat::Ident(prop) => prop.ident == param.key().value(),
+                _ => false,
+            },
+            syn::FnArg::Receiver(_) => false,
+        });
+        if !controlled {
+            return Err(syn::Error::new_spanned(
+                param.key(),
+                format!(
+                    "control `{}` matches no prop; knobs attach to props",
+                    param.key().value()
+                ),
+            ));
+        }
+    }
+
+    let mut plans = Vec::new();
     for input in &item.item.sig.inputs {
         let syn::FnArg::Typed(typed) = input else {
             continue;
@@ -335,28 +418,59 @@ fn validate_fixtures(attr: &StoryAttr, item: &StoryItem) -> syn::Result<()> {
         if prop.ident == "cx" {
             continue;
         }
-        if RESERVED.contains(&prop.ident.to_string().as_str()) {
-            return Err(syn::Error::new_spanned(
-                &prop.ident,
-                format!("prop `{}` collides with a reserved story key", prop.ident),
-            ));
-        }
+        let control = attr
+            .params
+            .iter()
+            .find_map(|param| (prop.ident == param.key().value()).then(|| param.kind.clone()));
+        let fixture = attr
+            .fixtures
+            .iter()
+            .find(|fixture| fixture.name == prop.ident)
+            .map(|fixture| fixture.value.clone());
         let defaulted = typed
             .attrs
             .iter()
             .any(|attr| attr.path().is_ident("default"));
-        if !defaulted {
-            required.push(prop.ident.clone());
-        }
-    }
+        let wire = wire_type(&typed.ty);
 
-    for prop in &required {
-        if !attr.fixtures.iter().any(|fixture| fixture.name == *prop) {
+        if let Some(kind) = &control {
+            if kind == "toggle" {
+                if !matches!(wire, WireType::Bool) {
+                    return Err(syn::Error::new_spanned(kind, "toggle needs a bool prop"));
+                }
+                if fixture.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        kind,
+                        "toggle needs no fixture; it defaults to off",
+                    ));
+                }
+            } else if matches!(wire, WireType::Skip) {
+                return Err(syn::Error::new_spanned(
+                    kind,
+                    format!(
+                        "cannot wire control `{}` to a custom-typed prop; show each value in its own story",
+                        prop.ident
+                    ),
+                ));
+            } else if fixture.is_none() {
+                return Err(syn::Error::new(
+                    item.item.sig.ident.span(),
+                    format!("control `{}` needs a fixture for its default", prop.ident),
+                ));
+            }
+        } else if !defaulted && fixture.is_none() {
             return Err(syn::Error::new(
                 item.item.sig.ident.span(),
-                format!("story is missing a fixture for prop `{prop}`"),
+                format!("story is missing a fixture for prop `{}`", prop.ident),
             ));
         }
+
+        plans.push(PropPlan {
+            name: prop.ident.clone(),
+            wire,
+            fixture,
+            control,
+        });
     }
     for fixture in &attr.fixtures {
         let known = item.item.sig.inputs.iter().any(|input| match input {
@@ -373,7 +487,7 @@ fn validate_fixtures(attr: &StoryAttr, item: &StoryItem) -> syn::Result<()> {
             ));
         }
     }
-    Ok(())
+    Ok(plans)
 }
 
 impl ToTokens for Story {
@@ -388,40 +502,106 @@ impl ToTokens for Story {
         let frame = attr.frame();
         let description = LitStr::new(&story.description(), Span::call_site());
         let params = &attr.params;
-        let fixtures = &attr.fixtures;
+
+        let mut setters = Vec::new();
+        for plan in &self.2 {
+            let prop = &plan.name;
+            let key = prop.to_string();
+            let fixture = plan.fixture.as_ref().map(|value| {
+                quote! { #value }
+            });
+            let control = plan.control.as_ref().map(ToString::to_string);
+            match (&plan.wire, control.as_deref(), fixture) {
+                (_, Some("toggle"), _) => {
+                    setters.push(quote! {
+                        .#prop(#topcoat_story::pair(pairs, #key).is_some_and(|value| value == "true"))
+                    });
+                }
+                (WireType::String, Some(_), Some(fixture)) => {
+                    setters.push(quote! {
+                        .#prop(#topcoat_story::pair(pairs, #key).map(ToOwned::to_owned).unwrap_or_else(|| #fixture))
+                    });
+                }
+                (WireType::Str, Some(_), Some(fixture)) => {
+                    setters.push(quote! {
+                        .#prop(#topcoat_story::pair(pairs, #key).unwrap_or(#fixture))
+                    });
+                }
+                (WireType::Bool, Some(_), Some(fixture)) => {
+                    setters.push(quote! {
+                        .#prop(
+                            #topcoat_story::pair(pairs, #key)
+                                .and_then(|value| match value {
+                                    "true" => ::std::option::Option::Some(true),
+                                    "false" => ::std::option::Option::Some(false),
+                                    _ => ::std::option::Option::None,
+                                })
+                                .unwrap_or_else(|| #fixture),
+                        )
+                    });
+                }
+                (WireType::Int(ty) | WireType::Float(ty), Some(_), Some(fixture)) => {
+                    setters.push(quote! {
+                        .#prop(
+                            #topcoat_story::pair(pairs, #key)
+                                .and_then(|value| value.parse::<#ty>().ok())
+                                .unwrap_or_else(|| #fixture),
+                        )
+                    });
+                }
+                (_, _, Some(fixture)) => {
+                    setters.push(quote! { .#prop(#fixture) });
+                }
+                (_, _, None) => {}
+            }
+        }
+
+        // Registration expands only with the `collect` feature, the way
+        // pages register only with `discover`: without it a story is just
+        // its component, so production builds carry nothing workshop-only.
+        let registration = cfg!(feature = "collect").then(|| {
+            quote! {
+                const _: () = {
+                    fn render(
+                        cx: &#topcoat_context::Cx,
+                        query: ::std::string::String,
+                    ) -> #topcoat_story::StoryFuture<'_> {
+                        ::std::boxed::Box::pin(async move {
+                            use #topcoat_view::ViewExt as _;
+                            let pairs = #topcoat_story::scoped_pairs(cx, &query);
+                            let props = <#ident as #topcoat_view::Component>::props_builder()
+                                #(#setters)*
+                                .build();
+                            ::std::result::Result::Ok(
+                                <#ident as #topcoat_view::Component>::render(#ident, cx, props)
+                                    .await?
+                                    .boxed(),
+                            )
+                        })
+                    }
+
+                    #topcoat_inventory::submit! {
+                        #topcoat_story::StoryEntry {
+                            meta: #topcoat_story::StoryMeta {
+                                group: #group,
+                                component: #component,
+                                name: #name,
+                                description: #description,
+                                frame: #frame,
+                                source_file: ::core::file!(),
+                                params: &[#(#params),*],
+                            },
+                            render,
+                        }
+                    }
+                };
+            }
+        });
 
         quote! {
             #item
 
-            const _: () = {
-                fn render(
-                    cx: &#topcoat_context::Cx,
-                ) -> #topcoat_view::BoxView<'_> {
-                    ::std::boxed::Box::pin(#topcoat_view::HoistView::new(
-                        #topcoat_view::internal::ThenView::new(async move {
-                            let props = <#ident as #topcoat_view::Component>::props_builder()
-                                #(#fixtures)*
-                                .build();
-                            <#ident as #topcoat_view::Component>::render(#ident, cx, props).await
-                        }),
-                    ))
-                }
-
-                #topcoat_inventory::submit! {
-                    #topcoat_story::StoryEntry {
-                        meta: #topcoat_story::StoryMeta {
-                            group: #group,
-                            component: #component,
-                            name: #name,
-                            description: #description,
-                            frame: #frame,
-                            source_file: ::core::file!(),
-                            params: &[#(#params),*],
-                        },
-                        render,
-                    }
-                }
-            };
+            #registration
         }
         .to_tokens(tokens);
     }

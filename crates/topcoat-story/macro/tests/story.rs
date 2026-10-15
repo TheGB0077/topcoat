@@ -10,10 +10,17 @@ use topcoat::{
     component = "Badge",
     name = "Default",
     params = [select("tone", ["plain", "loud"]), toggle("glow")],
+    fixtures = [tone = "plain".to_owned()],
 )]
 #[component]
-async fn badge_default() -> Result<impl View> {
-    Ok(view! { <span>"new"</span> })
+async fn badge_default(tone: String, glow: bool) -> Result<impl View> {
+    Ok(view! {
+        <span>
+            (tone)
+            " "
+            (glow)
+        </span>
+    })
 }
 
 #[test]
@@ -42,7 +49,7 @@ fn story_registers_in_stories() {
     group = "Shop",
     component = "Badge",
     name = "Labeled",
-    title = "clearance"
+    fixtures = [title = "clearance"]
 )]
 #[component]
 async fn badge_labeled(title: &str) -> Result<impl View> {
@@ -67,10 +74,51 @@ async fn story_with_fixture_renders_its_prop() {
         .find(|entry| entry.meta.name == "Labeled")
         .expect("the story is registered");
     let cx = Cx::default();
-    let html = (entry.render)(&cx)
-        .single()
+    let html = (entry.render)(&cx, String::new())
         .await
         .expect("story renders")
+        .single()
+        .await
+        .expect("story polls")
         .render(&cx);
     assert!(html.contains("clearance"), "{html}");
+}
+
+/// A card whose tone knob is wired to its prop.
+#[story(
+    group = "Shop",
+    component = "Badge",
+    name = "Toned",
+    params = [select("tone", ["plain", "loud"])],
+    fixtures = [tone = "plain".to_owned()],
+)]
+#[component]
+async fn badge_toned(tone: String) -> Result<impl View> {
+    Ok(view! { <span>(tone)</span> })
+}
+
+#[tokio::test]
+async fn control_value_overrides_fixture() {
+    use topcoat::{context::Cx, view::ViewExt};
+
+    async fn render(query: &str) -> String {
+        let entry = stories()
+            .iter()
+            .find(|entry| entry.meta.name == "Toned")
+            .expect("the story is registered");
+        let cx = Cx::default();
+        (entry.render)(&cx, query.to_owned())
+            .await
+            .expect("story renders")
+            .single()
+            .await
+            .expect("story polls")
+            .render(&cx)
+    }
+
+    let html = render("tone=loud").await;
+    assert!(html.contains("loud"), "{html}");
+    assert!(!html.contains("plain"), "{html}");
+    let html = render("").await;
+    assert!(html.contains("plain"), "{html}");
 }
