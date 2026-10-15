@@ -36,3 +36,41 @@ fn story_registers_in_stories() {
     assert_eq!(entry.meta.params[1].name, "glow");
     assert_eq!(entry.meta.params[1].kind, ParamKind::Toggle);
 }
+
+/// A card labeled with its deal title.
+#[story(
+    group = "Shop",
+    component = "Badge",
+    name = "Labeled",
+    title = "clearance"
+)]
+#[component]
+async fn badge_labeled(title: &str) -> Result<impl View> {
+    Ok(view! { <span>(title)</span> })
+}
+
+#[test]
+fn story_with_fixture_registers() {
+    let entry = stories()
+        .iter()
+        .find(|entry| entry.meta.name == "Labeled")
+        .expect("the story is registered");
+    assert_eq!(entry.meta.component, "Badge");
+}
+
+#[tokio::test]
+async fn story_with_fixture_renders_its_prop() {
+    use topcoat::{context::Cx, view::ViewExt};
+
+    let entry = stories()
+        .iter()
+        .find(|entry| entry.meta.name == "Labeled")
+        .expect("the story is registered");
+    let cx = Cx::default();
+    let html = (entry.render)(&cx)
+        .single()
+        .await
+        .expect("story renders")
+        .render(&cx);
+    assert!(html.contains("clearance"), "{html}");
+}
