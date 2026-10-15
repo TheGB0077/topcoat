@@ -5453,7 +5453,9 @@ dependencies = [
 name = "topcoat-story"
 version = "0.10.0"
 dependencies = [
+ "futures-core",
  "inventory",
+ "percent-encoding",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -5461,10 +5463,12 @@ dependencies = [
  "topcoat",
  "topcoat-asset",
  "topcoat-core",
+ "topcoat-core-macro",
  "topcoat-router",
  "topcoat-router-macro",
  "topcoat-runtime",
  "topcoat-runtime-macro",
+ "topcoat-story-macro",
  "topcoat-view",
  "topcoat-view-macro",
 ]

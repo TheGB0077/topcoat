@@ -2,7 +2,7 @@
 
 use std::sync::OnceLock;
 
-use topcoat_core::context::{Cx, try_request_context};
+use topcoat_core::{context::Cx, error::Error};
 use topcoat_view::BoxView;
 
 /// One control in a story's controls panel.
@@ -19,6 +19,11 @@ pub struct ParamDef {
 pub enum ParamKind {
     /// Drop-down over the listed values.
     Select(&'static [&'static str]),
+    /// Drop-down like [`ParamKind::Select`], but shared: its value rides
+    /// along every dashboard navigation and the toolbar offers one
+    /// switcher per key. Declare the same key with the same options in
+    /// each participating story.
+    Global(&'static [&'static str]),
     /// On/off checkbox, submitted as `true` when checked.
     Toggle,
     /// Free text input.
@@ -60,34 +65,59 @@ pub struct StoryMeta {
     pub params: &'static [ParamDef],
 }
 
-/// The story's control values, set by whoever renders the story.
+/// The decoded control pairs for a query string, cached per request.
 ///
-/// The dashboard sets this from the request query on full page loads
-/// and from the live control signals on shard re-renders, so stories
-/// read one source either way.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StoryQuery(pub String);
-
-/// Reads a story's controls: the dashboard-provided query if the story
-/// renders there, defaults otherwise.
-///
-/// Stories declare their controls with an ordinary deserializable struct
-/// of optional fields and fall back per struct, not per field: a missing
-/// or malformed query parses to `Q::default()`. Outside the dashboard,
-/// where no query is provided, that is also what you get.
-#[must_use]
-pub fn controls<Q>(cx: &Cx) -> Q
-where
-    Q: serde::de::DeserializeOwned + Default,
-{
-    try_request_context::<StoryQuery>(cx)
-        .map(|query| query.0.clone())
-        .and_then(|query| serde_urlencoded::from_str(&query).ok())
-        .unwrap_or_default()
+/// Borrowed for the lifetime of `cx`, so generated story code can merge
+/// control values into borrowed props without anything escaping.
+#[topcoat_core_macro::memoize]
+pub fn scoped_pairs(cx: &Cx, query: &str) -> Vec<(String, String)> {
+    let _ = cx;
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .map(|(key, value)| {
+            (
+                key.to_owned(),
+                percent_encoding::percent_decode_str(&value.replace('+', " "))
+                    .decode_utf8_lossy()
+                    .into_owned(),
+            )
+        })
+        .collect()
 }
 
-/// Renders a story's canvas for the gallery.
-pub type StoryRenderFn = for<'a> fn(&'a Cx) -> BoxView<'a>;
+/// The decoded value for a key in already-parsed pairs.
+#[must_use]
+pub fn pair<'a>(pairs: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    pairs
+        .iter()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.as_str())
+}
+
+/// Renders a story to its canvas for the given control query.
+///
+/// The future resolves to a view borrowing only request-lived state:
+/// control values come from [`scoped_pairs`], fixtures move or borrow
+/// statics, so nothing function-local escapes.
+pub type StoryFuture<'a> = futures_core::future::BoxFuture<'a, Result<BoxView<'a>, Error>>;
+
+/// Renders a story to its canvas for the given control query.
+pub type StoryRenderFn = for<'a> fn(&'a Cx, String) -> StoryFuture<'a>;
+
+/// The decoded value for a query key, with `+` as space.
+#[must_use]
+pub fn query_value(query: Option<&str>, key: &str) -> Option<String> {
+    query?
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(name, _)| *name == key)
+        .map(|(_, value)| {
+            percent_encoding::percent_decode_str(&value.replace('+', " "))
+                .decode_utf8_lossy()
+                .into_owned()
+        })
+}
 
 /// One collected story.
 pub struct StoryEntry {
@@ -140,34 +170,30 @@ mod tests {
 
     use super::*;
 
-    #[derive(Debug, Default, PartialEq, serde::Deserialize)]
-    struct CardQuery {
-        tone: Option<String>,
-        glow: Option<bool>,
-    }
-
     #[test]
-    fn controls_read_the_provided_query() {
-        let cx = Cx::default().with(StoryQuery("tone=loud&glow=true".to_owned()));
-        assert_eq!(
-            controls::<CardQuery>(&cx),
-            CardQuery {
-                tone: Some("loud".to_owned()),
-                glow: Some(true),
-            }
-        );
-    }
-
-    #[test]
-    fn controls_fall_back_to_defaults() {
+    fn scoped_pairs_decode_once_per_request() {
         let cx = Cx::default();
-        assert_eq!(controls::<CardQuery>(&cx), CardQuery::default());
-        let cx = Cx::default().with(StoryQuery("glow=notabool".to_owned()));
-        assert_eq!(controls::<CardQuery>(&cx), CardQuery::default());
+        let first = scoped_pairs(&cx, "tone=loud&nick=Gabriel+Lima");
+        let second = scoped_pairs(&cx, "tone=loud&nick=Gabriel+Lima");
+        assert!(std::ptr::eq(first, second));
+        assert_eq!(pair(first, "tone"), Some("loud"));
+        assert_eq!(pair(first, "nick"), Some("Gabriel Lima"));
+        assert_eq!(pair(first, "missing"), None);
     }
 
-    fn blank(_cx: &Cx) -> BoxView<'_> {
-        ().boxed()
+    #[test]
+    fn scoped_pairs_key_on_scope_and_query() {
+        let cx = Cx::default();
+        let scoped = cx.with("marker");
+        assert_eq!(
+            pair(scoped_pairs(&scoped, "tone=loud"), "tone"),
+            Some("loud")
+        );
+        assert_eq!(pair(scoped_pairs(&cx, "tone=soft"), "tone"), Some("soft"));
+    }
+
+    fn blank(_cx: &Cx, _query: String) -> StoryFuture<'_> {
+        Box::pin(async move { Ok(().boxed()) })
     }
 
     inventory::submit! {
@@ -223,6 +249,25 @@ mod tests {
             .collect();
         assert!(order.windows(2).all(|pair| pair[0] <= pair[1]), "{order:?}");
         assert!(order.contains(&("Apple", "Card", "Default")));
+    }
+
+    #[test]
+    fn query_value_decodes_keys() {
+        assert_eq!(
+            query_value(Some("tone=loud"), "tone"),
+            Some("loud".to_owned())
+        );
+        assert_eq!(query_value(Some("a=1&b=2"), "b"), Some("2".to_owned()));
+        assert_eq!(query_value(Some("tone=loud"), "missing"), None);
+        assert_eq!(query_value(None, "tone"), None);
+        assert_eq!(
+            query_value(Some("name=Gabriel+Lima"), "name"),
+            Some("Gabriel Lima".to_owned())
+        );
+        assert_eq!(
+            query_value(Some("name=Gabriel%20Lima"), "name"),
+            Some("Gabriel Lima".to_owned())
+        );
     }
 
     #[test]

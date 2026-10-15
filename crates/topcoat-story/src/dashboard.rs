@@ -22,10 +22,10 @@ use topcoat_router::{
 use topcoat_router_macro::path_param;
 use topcoat_runtime::{Event, Signal, signal};
 use topcoat_runtime_macro::shard;
-use topcoat_view::{BoxView, Child, HoistView, Unescaped, View, ViewExt, internal::ThenView};
+use topcoat_view::{BoxView, Child, HoistView, Unescaped, View, internal::ThenView};
 use topcoat_view_macro::{component, view};
 
-use super::{Frame, ParamKind, StoryEntry, StoryQuery, find, stories};
+use super::{Frame, ParamKind, StoryEntry, find, query_value, stories};
 
 /// Percent-encodes one URL path segment, leaving unreserved characters.
 fn encode_segment(segment: &str) -> String {
@@ -143,7 +143,7 @@ impl Background {
 }
 
 /// Toolbar state: the two canvas presets. Everything else in the query
-/// string belongs to the story's controls or the sidebar search.
+/// string belongs to the story's controls, globals, or the sidebar search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct Toolbar {
     viewport: Viewport,
@@ -154,33 +154,85 @@ impl Toolbar {
     /// Reads the toolbar keys out of a raw query string.
     fn parse(query: Option<&str>) -> Self {
         Self {
-            viewport: Viewport::parse(query_value(query, "viewport")),
-            bg: Background::parse(query_value(query, "bg")),
+            viewport: Viewport::parse(query_value(query, "viewport").as_deref()),
+            bg: Background::parse(query_value(query, "bg").as_deref()),
         }
     }
+}
 
-    /// The query suffix preserving non-default toolbar state, for links
-    /// that navigate without submitting a form.
-    fn suffix(self) -> String {
-        let mut suffix = String::new();
-        for (key, value) in self.viewport.query().into_iter().chain(self.bg.query()) {
-            suffix.push(if suffix.is_empty() { '?' } else { '&' });
-            suffix.push_str(key);
-            suffix.push('=');
-            suffix.push_str(value);
+/// Query pairs that ride along dashboard navigation: canvas presets,
+/// every global value present, and the sidebar search. Story controls
+/// never ride: each story owns its knobs.
+fn preserved(query: Option<&str>) -> Vec<(String, String)> {
+    let toolbar = Toolbar::parse(query);
+    let mut pairs: Vec<(String, String)> = toolbar
+        .viewport
+        .query()
+        .into_iter()
+        .chain(toolbar.bg.query())
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect();
+    for (key, _) in supported_globals() {
+        if let Some(value) = query_value(query, key) {
+            pairs.push((key.to_owned(), value));
         }
-        suffix
     }
+    if let Some(value) = query_value(query, "q") {
+        pairs.push(("q".to_owned(), value));
+    }
+    pairs
+}
 
-    /// The toolbar keys as hidden form pairs, for the search form that
-    /// submits without the toolbar selects.
-    fn hidden(self) -> Vec<(&'static str, &'static str)> {
-        self.viewport
-            .query()
-            .into_iter()
-            .chain(self.bg.query())
-            .collect()
+/// The query suffix preserving navigation state, for links that
+/// navigate without submitting a form.
+fn preserved_suffix(query: Option<&str>) -> String {
+    let mut suffix = String::new();
+    for (key, value) in preserved(query) {
+        suffix.push(if suffix.is_empty() { '?' } else { '&' });
+        suffix.push_str(&encode_segment(&key));
+        suffix.push('=');
+        suffix.push_str(&encode_segment(&value));
     }
+    suffix
+}
+
+/// Preserved pairs minus the given keys, for hidden form inputs: keys
+/// a form already submits need no duplication.
+fn carry(query: Option<&str>, skip: &[&str]) -> Vec<(String, String)> {
+    preserved(query)
+        .into_iter()
+        .filter(|(key, _)| !skip.contains(&key.as_str()))
+        .collect()
+}
+
+/// Every global the registry declares: the union of `global` controls
+/// across stories, keyed by name with merged options in first-seen
+/// order. Globals behave like selects within their own story and ride
+/// along every dashboard navigation; the toolbar below offers one
+/// switcher per key. Declare the same key with the same options in
+/// each participating story.
+fn supported_globals() -> Vec<(&'static str, Vec<&'static str>)> {
+    let mut globals: Vec<(&'static str, Vec<&'static str>)> = Vec::new();
+    for entry in stories() {
+        for param in entry.meta.params {
+            let ParamKind::Global(options) = param.kind else {
+                continue;
+            };
+            let global =
+                if let Some(global) = globals.iter_mut().find(|global| global.0 == param.name) {
+                    global
+                } else {
+                    globals.push((param.name, Vec::new()));
+                    globals.last_mut().expect("global was pushed")
+                };
+            for option in options {
+                if !global.1.contains(option) {
+                    global.1.push(option);
+                }
+            }
+        }
+    }
+    globals
 }
 
 /// The source of the dev server's update script, when the dashboard runs
@@ -250,15 +302,6 @@ fn sidebar_tree(filter: Option<&str>) -> Vec<SidebarGroup> {
     tree
 }
 
-/// The raw query value for a key, if the request carries one.
-fn query_value<'a>(query: Option<&'a str>, key: &str) -> Option<&'a str> {
-    query?
-        .split('&')
-        .filter_map(|pair| pair.split_once('='))
-        .find(|(name, _)| *name == key)
-        .map(|(_, value)| value)
-}
-
 /// Reads a registry source file for the source panel.
 ///
 /// Registry paths are workspace-relative, while the server's working
@@ -291,21 +334,22 @@ fn read_source(source_file: &str) -> Option<String> {
 const SYNC_SCRIPT: &str = "function syncStoryUrl(form){var params=new URLSearchParams(new FormData(form));var query=params.toString();history.replaceState(null,'',location.pathname+(query?'?'+query:''));}";
 
 /// The dashboard shell: sidebar registry tree plus the page content.
-/// `current` is the request path, highlighting the open story. `toolbar`
-/// state rides along in sidebar links so canvas presets survive
-/// navigation, and `filter` narrows the tree to matching names.
+/// `current` is the request path, highlighting the open story. `query`
+/// is the raw query string: toolbar presets, globals, and the search
+/// filter all ride along navigation from it, and the tree narrows to
+/// matching names.
 #[component]
 async fn shell(
     cx: &Cx,
     title: &str,
     current: &str,
-    toolbar: Toolbar,
-    filter: Option<String>,
+    query: Option<String>,
     #[default] child: Child<'_>,
 ) -> Result<impl View> {
+    let filter = query_value(query.as_deref(), "q");
     let tree = sidebar_tree(filter.as_deref());
-    let suffix = toolbar.suffix();
-    let filtering = filter.is_some();
+    let suffix = preserved_suffix(query.as_deref());
+    let filtering = filter.as_deref().is_some_and(|filter| !filter.is_empty());
     let live = try_app_context::<AssetConfig>(cx).is_some();
     Ok(view! {
         <!DOCTYPE html>
@@ -351,8 +395,10 @@ async fn shell(
                             onchange="this.form.submit()"
                             style="width:100%;box-sizing:border-box;padding:6px 10px;font-size:13px;border:1px solid #e5e0d8;border-radius:8px;background:#fff"
                         >
-                        for pair in toolbar.hidden() {
-                            <input type="hidden" name=(pair.0) value=(pair.1)>
+                        for (key, value) in preserved(query.as_deref())
+                            .into_iter()
+                            .filter(|(key, _)| key != "q") {
+                            <input type="hidden" name=(key) value=(value)>
                         }
                     </form>
                     for group in &tree {
@@ -479,6 +525,7 @@ async fn framed(
 fn kind_label(kind: ParamKind) -> &'static str {
     match kind {
         ParamKind::Select(_) => "select",
+        ParamKind::Global(_) => "global",
         ParamKind::Toggle => "boolean",
         ParamKind::Text => "string",
     }
@@ -487,7 +534,7 @@ fn kind_label(kind: ParamKind) -> &'static str {
 /// The options for a select control, joined for the controls table.
 fn kind_options(kind: ParamKind) -> String {
     match kind {
-        ParamKind::Select(options) => options.join(", "),
+        ParamKind::Select(options) | ParamKind::Global(options) => options.join(", "),
         ParamKind::Toggle => "true".to_owned(),
         ParamKind::Text => "free text".to_owned(),
     }
@@ -516,7 +563,7 @@ async fn canvas(
     name: String,
     query: String,
 ) -> Result<impl View> {
-    struct Live {
+    struct Live<'a> {
         entry: &'static StoryEntry,
         viewport: Signal<String>,
         bg: Signal<String>,
@@ -524,42 +571,39 @@ async fn canvas(
         viewport_preset: Viewport,
         bg_preset: Background,
         reset_url: String,
-        rendered: String,
+        globals_carry: Vec<(String, String)>,
+        carry_over: Vec<(String, String)>,
+        rendered: BoxView<'a>,
     }
 
     let live = match find(&group, &component, &name) {
         None => None,
         Some(entry) => {
             let viewport = signal(&cx.keyed("toolbar:viewport"), || {
-                query_value(Some(&query), "viewport")
-                    .unwrap_or("full")
-                    .to_owned()
+                query_value(Some(&query), "viewport").unwrap_or_else(|| "full".to_owned())
             });
             let bg = signal(&cx.keyed("toolbar:bg"), || {
-                query_value(Some(&query), "bg")
-                    .unwrap_or("default")
-                    .to_owned()
+                query_value(Some(&query), "bg").unwrap_or_else(|| "default".to_owned())
             });
 
             let mut states = Vec::new();
             for param in entry.meta.params {
                 let keyed = cx.keyed(format!("control:{}", param.name));
                 match param.kind {
-                    ParamKind::Select(_) | ParamKind::Text => {
-                        let initial = query_value(Some(&query), param.name)
-                            .unwrap_or("")
-                            .to_owned();
+                    ParamKind::Select(_) | ParamKind::Global(_) | ParamKind::Text => {
+                        let initial = query_value(Some(&query), param.name).unwrap_or_default();
                         states.push(ControlSignal::Text(signal(&keyed, || initial)));
                     }
                     ParamKind::Toggle => {
-                        let initial = query_value(Some(&query), param.name) == Some("true");
+                        let initial =
+                            query_value(Some(&query), param.name).as_deref() == Some("true");
                         states.push(ControlSignal::Toggle(signal(&keyed, || initial)));
                     }
                 }
             }
 
-            let viewport_preset = Viewport::parse(Some(&viewport.get()));
-            let bg_preset = Background::parse(Some(&bg.get()));
+            let viewport_preset = Viewport::parse(Some(viewport.get()).as_deref());
+            let bg_preset = Background::parse(Some(bg.get()).as_deref());
 
             let mut pairs = Vec::new();
             for (param, state) in entry.meta.params.iter().zip(&states) {
@@ -581,17 +625,17 @@ async fn canvas(
             let reset_url = format!(
                 "{}{}",
                 story_url(entry.meta.group, entry.meta.component, entry.meta.name),
-                Toolbar {
-                    viewport: viewport_preset,
-                    bg: bg_preset,
-                }
-                .suffix()
+                preserved_suffix(Some(&query)),
             );
 
-            let rendered = {
-                let scoped = cx.with(StoryQuery(effective));
-                (entry.render)(&scoped).first().await?.render(&scoped)
-            };
+            let rendered = (entry.render)(cx, effective).await?;
+
+            let global_keys: Vec<&str> =
+                supported_globals().iter().map(|global| global.0).collect();
+            let globals_carry = carry(Some(&query), &global_keys);
+            let mut live_skip = vec!["viewport", "bg"];
+            live_skip.extend(entry.meta.params.iter().map(|param| param.name));
+            let carry_over = carry(Some(&query), &live_skip);
 
             Some(Live {
                 entry,
@@ -601,6 +645,8 @@ async fn canvas(
                 viewport_preset,
                 bg_preset,
                 reset_url,
+                globals_carry,
+                carry_over,
                 rendered,
             })
         }
@@ -617,10 +663,50 @@ async fn canvas(
                     viewport_preset,
                     bg_preset,
                     reset_url,
+                    globals_carry,
+                    carry_over,
                     rendered,
                 },
             ) => {
+                if !supported_globals().is_empty() {
+                    <form
+                        method="get"
+                        action=""
+                        style="display:flex;gap:16px;align-items:flex-end;margin-bottom:16px;flex-wrap:wrap"
+                    >
+                        for (key, options) in supported_globals() {
+                            <div>
+                                <div
+                                    style="font-size:12px;font-weight:700;color:#8a7a6d;margin-bottom:4px"
+                                >
+                                    (key)
+                                </div>
+                                <select
+                                    name=(key)
+                                    onchange="this.form.submit()"
+                                    style="padding:4px 8px;font-size:13px;border:1px solid #e5e0d8;border-radius:6px;background:#fff"
+                                >
+                                    for option in options {
+                                        <option
+                                            value=(option)
+                                            selected=(query_value(Some(&query), key).as_deref()
+                                                == Some(option))
+                                        >
+                                            (option)
+                                        </option>
+                                    }
+                                </select>
+                            </div>
+                        }
+                        for (key, value) in globals_carry {
+                            <input type="hidden" name=(key) value=(value)>
+                        }
+                    </form>
+                }
                 <form method="get" action="" onsubmit="return false">
+                    for (key, value) in carry_over {
+                        <input type="hidden" name=(key) value=(value)>
+                    }
                     <div
                         style="display:flex;gap:16px;align-items:flex-end;margin-bottom:16px;flex-wrap:wrap"
                     >
@@ -704,7 +790,7 @@ async fn canvas(
                         frame: entry.meta.frame,
                         width: viewport_preset.wrap(),
                         backdrop: bg_preset.backdrop(),
-                        (Unescaped::new_unchecked(rendered))
+                        (rendered)
                     )
 
                     if !entry.meta.params.is_empty() {
@@ -740,7 +826,7 @@ async fn canvas(
                                 match state {
                                     ControlSignal::Text(handle) => {
                                         match param.kind {
-                                            ParamKind::Select(options) => {
+                                            ParamKind::Select(options) | ParamKind::Global(options) => {
                                                 <div
                                                     style="display:flex;align-items:center;gap:8px;margin-bottom:8px"
                                                 >
@@ -822,17 +908,14 @@ async fn canvas(
 /// The dashboard index.
 fn index_view(cx: &Cx) -> impl View {
     let empty = stories().is_empty();
-    let query = uri(cx).query();
-    let toolbar = Toolbar::parse(query);
-    let filter = query_value(query, "q").map(str::to_owned);
+    let query = uri(cx).query().map(str::to_owned);
     view! {
         cx =>
         ((header::CACHE_CONTROL, HeaderValue::from_static("no-store")))
         shell(
             title: "Index",
             current: "/",
-            toolbar: toolbar,
-            filter: filter,
+            query: query,
             <h1 style="margin-top:0">"Stories"</h1>
             if empty {
                 <p>"No stories registered yet. Add a #[story] to a component."</p>
@@ -854,8 +937,6 @@ fn story_page_view(cx: &Cx) -> Result<impl View> {
     let name = path_param::<StoryName>(cx);
     let entry: &'static StoryEntry = find(group, component, name).ok_or_not_found()?;
     let query = uri(cx).query().map(str::to_owned);
-    let toolbar = Toolbar::parse(query.as_deref());
-    let filter = query_value(query.as_deref(), "q").map(str::to_owned);
     let canonical = story_url(group, component, name);
 
     Ok(view! {
@@ -864,8 +945,7 @@ fn story_page_view(cx: &Cx) -> Result<impl View> {
         shell(
             title: entry.meta.name,
             current: canonical.as_str(),
-            toolbar: toolbar,
-            filter: filter,
+            query: query.clone(),
             <h1 style="margin-top:0">(entry.meta.name)</h1>
             <p style="color:#8a7a6d">
                 (entry.meta.group)
@@ -979,7 +1059,7 @@ mod tests {
     use topcoat_view_macro::view;
 
     use super::*;
-    use crate::{ParamDef, StoryMeta, controls};
+    use crate::{ParamDef, StoryFuture, StoryMeta};
 
     #[test]
     fn encodes_reserved_characters_in_story_urls() {
@@ -997,24 +1077,11 @@ mod tests {
         assert!(source.contains("source panel"));
     }
 
-    /// A probe story rendering its control query, submitted straight to
-    /// the registry without the macro.
-    fn probe_render(cx: &Cx) -> BoxView<'_> {
-        #[derive(Debug, Default, serde::Deserialize)]
-        struct ProbeQuery {
-            tone: Option<String>,
-        }
-        let tone = controls::<ProbeQuery>(cx)
-            .tone
-            .unwrap_or_else(|| "plain".to_owned());
-        view! {
-            cx =>
-            <span>
-                "probe:"
-                (tone)
-            </span>
-        }
-        .boxed()
+    /// A probe story rendering static content, submitted straight to
+    /// the registry without the macro. Exercises shard-inline rendering
+    /// with no router involved.
+    fn probe_render(cx: &Cx, _query: String) -> StoryFuture<'_> {
+        Box::pin(async move { Ok(view! { cx => <span>"probe"</span> }.boxed()) })
     }
 
     inventory::submit! {
@@ -1051,35 +1118,70 @@ mod tests {
         .await
         .expect("shard renders")
         .render(&cx);
-        assert!(html.contains("probe:loud"), "{html}");
+        assert!(html.contains(">probe<"), "{html}");
+    }
+
+    inventory::submit! {
+        StoryEntry {
+            meta: StoryMeta {
+                group: "I18n",
+                component: "Greeting",
+                name: "Localized",
+                description: "",
+                frame: Frame::Padded,
+                source_file: file!(),
+                params: &[
+                    ParamDef {
+                        name: "locale",
+                        kind: ParamKind::Global(&["en", "pt"]),
+                    },
+                    ParamDef {
+                        name: "theme",
+                        kind: ParamKind::Global(&["light", "dark"]),
+                    },
+                ],
+            },
+            render: probe_render,
+        }
     }
 
     #[test]
-    fn toolbar_parses_canvas_presets_leniently() {
-        assert_eq!(Toolbar::parse(None), Toolbar::default());
+    fn supported_globals_unions_declared_keys() {
         assert_eq!(
-            Toolbar::parse(Some("viewport=mobile&bg=pine")),
-            Toolbar {
-                viewport: Viewport::Mobile,
-                bg: Background::Pine,
-            }
-        );
-        assert_eq!(
-            Toolbar::parse(Some("viewport=wide&bg=neon")),
-            Toolbar::default()
+            supported_globals(),
+            vec![
+                ("locale", vec!["en", "pt"]),
+                ("theme", vec!["light", "dark"]),
+            ]
         );
     }
 
     #[test]
-    fn toolbar_suffix_preserves_only_set_presets() {
-        assert_eq!(Toolbar::default().suffix(), "");
+    fn preserved_carries_presets_globals_and_search() {
+        assert_eq!(preserved(None), Vec::<(String, String)>::new());
         assert_eq!(
-            Toolbar {
-                viewport: Viewport::Tablet,
-                bg: Background::Pine,
-            }
-            .suffix(),
-            "?viewport=tablet&bg=pine"
+            preserved(Some("viewport=tablet&bg=pine&tone=loud&q=card")),
+            vec![
+                ("viewport".to_owned(), "tablet".to_owned()),
+                ("bg".to_owned(), "pine".to_owned()),
+                ("q".to_owned(), "card".to_owned()),
+            ]
+        );
+        assert_eq!(preserved_suffix(None), "");
+        assert_eq!(
+            preserved_suffix(Some("viewport=mobile")),
+            "?viewport=mobile"
+        );
+    }
+
+    #[test]
+    fn carry_skips_form_native_keys() {
+        assert_eq!(
+            carry(Some("viewport=mobile&locale=pt&tone=loud"), &["tone"]),
+            vec![
+                ("viewport".to_owned(), "mobile".to_owned()),
+                ("locale".to_owned(), "pt".to_owned()),
+            ]
         );
     }
 

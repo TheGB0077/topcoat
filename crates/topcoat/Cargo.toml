@@ -82,10 +82,11 @@ datastar = [
 story = [
 	"dep:topcoat-story",
 	"dep:topcoat-story-macro",
-	"topcoat-story/router",
 ]
 design-story = [
 	"story",
+	"topcoat-story/router",
+	"topcoat-story-macro/collect",
 	"router",
 	"view",
 	"serve",

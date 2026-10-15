@@ -10,6 +10,9 @@ keywords.workspace = true
 categories.workspace = true
 rust-version.workspace = true
 
+[features]
+collect = []
+
 [dependencies]
 topcoat-core-grammar.workspace = true
 
