@@ -335,6 +335,7 @@ enum WireType {
     Bool,
     Int(Ident),
     Float(Ident),
+    Opt(Box<WireType>),
     Skip,
 }
 
@@ -345,6 +346,18 @@ fn wire_type(ty: &syn::Type) -> WireType {
             let Some(segment) = path.path.segments.last() else {
                 return WireType::Skip;
             };
+            if segment.ident == "Option" {
+                let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+                    return WireType::Skip;
+                };
+                let Some(syn::GenericArgument::Type(inner)) = args.args.first() else {
+                    return WireType::Skip;
+                };
+                return match wire_type(inner) {
+                    WireType::Skip => WireType::Skip,
+                    inner => WireType::Opt(Box::new(inner)),
+                };
+            }
             if !matches!(segment.arguments, syn::PathArguments::None) {
                 return WireType::Skip;
             }
@@ -418,6 +431,17 @@ fn plan_props(attr: &StoryAttr, item: &StoryItem) -> syn::Result<Vec<PropPlan>> 
         if prop.ident == "cx" {
             continue;
         }
+        if prop.ident == "child"
+            && !typed
+                .attrs
+                .iter()
+                .any(|attr| attr.path().is_ident("default"))
+        {
+            return Err(syn::Error::new_spanned(
+                &prop.ident,
+                "pass children from a wrapper story function; attributes cannot carry markup",
+            ));
+        }
         let control = attr
             .params
             .iter()
@@ -444,7 +468,9 @@ fn plan_props(attr: &StoryAttr, item: &StoryItem) -> syn::Result<Vec<PropPlan>> 
                         "toggle needs no fixture; it defaults to off",
                     ));
                 }
-            } else if matches!(wire, WireType::Skip) {
+            } else if matches!(&wire, WireType::Skip)
+                || matches!(&wire, WireType::Opt(inner) if matches!(**inner, WireType::Skip))
+            {
                 return Err(syn::Error::new_spanned(
                     kind,
                     format!(
@@ -548,6 +574,36 @@ impl ToTokens for Story {
                                 .unwrap_or_else(|| #fixture),
                         )
                     });
+                }
+                (WireType::Opt(inner), Some(_), Some(fixture)) => {
+                    let merge = match &**inner {
+                        WireType::String => quote! {
+                            #topcoat_story::pair(pairs, #key)
+                                .map(ToOwned::to_owned)
+                                .or(#fixture)
+                        },
+                        WireType::Str => quote! {
+                            #topcoat_story::pair(pairs, #key).or(#fixture)
+                        },
+                        WireType::Bool => quote! {
+                            #topcoat_story::pair(pairs, #key)
+                                .and_then(|value| match value {
+                                    "true" => ::std::option::Option::Some(true),
+                                    "false" => ::std::option::Option::Some(false),
+                                    _ => ::std::option::Option::None,
+                                })
+                                .or(#fixture)
+                        },
+                        WireType::Int(ty) | WireType::Float(ty) => quote! {
+                            #topcoat_story::pair(pairs, #key)
+                                .and_then(|value| value.parse::<#ty>().ok())
+                                .or(#fixture)
+                        },
+                        WireType::Opt(_) | WireType::Skip => {
+                            quote! { #fixture }
+                        }
+                    };
+                    setters.push(quote! { .#prop(#merge) });
                 }
                 (_, _, Some(fixture)) => {
                     setters.push(quote! { .#prop(#fixture) });

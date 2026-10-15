@@ -42,10 +42,13 @@ A control whose key matches a prop wires straight into it: the knob
 value overrides the fixture, an absent or invalid knob falls back to it.
 `toggles` pair only with `bool` props, take no fixture, and default to
 off. Text, select, and toggle cover `String`, `&str`, `bool`, and the
-number types. A control must name a prop it can drive; anything else is
-rejected, so a misspelled control fails the build instead of sitting
-dead in the workshop. Types outside the wired set keep their fixture:
-show each value in its own story, the way matrix stories already do.
+number types, and `Option` of any of those (`None` and `Some(..)` both
+work as fixtures). Anything else keeps its fixture: show each value in
+its own story, the way matrix stories already do. Children never take
+fixtures — attributes cannot carry markup, so a component with a
+required child gets a thin wrapper story that renders it with inline
+children. `&str` fixtures must be literals; owned values cannot borrow
+into a lazily returned view.
 
 A `global("key", [...])` control behaves like `select` within its own
 story and additionally rides along every dashboard navigation, with one

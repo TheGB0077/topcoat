@@ -1,7 +1,7 @@
 use topcoat::{
     Result,
     story::{Frame, ParamKind, stories, story},
-    view::{View, component, view},
+    view::{Child, View, component, view},
 };
 
 /// A plain card.
@@ -121,4 +121,112 @@ async fn control_value_overrides_fixture() {
     assert!(!html.contains("plain"), "{html}");
     let html = render("").await;
     assert!(html.contains("plain"), "{html}");
+}
+
+/// An aligned card with optional props.
+#[story(
+    group = "Shop",
+    component = "Badge",
+    name = "Aligned",
+    params = [select("align", ["left", "center"]), select("count", ["1", "4"])],
+    fixtures = [align = None, count = Some(2)],
+)]
+#[component]
+async fn badge_aligned(align: Option<&str>, count: Option<u32>) -> Result<impl View> {
+    Ok(view! {
+        <span>
+            (align.unwrap_or("left"))
+            " "
+            (count.unwrap_or(0))
+        </span>
+    })
+}
+
+#[tokio::test]
+async fn optional_controls_fall_back_to_fixtures() {
+    use topcoat::{context::Cx, view::ViewExt};
+
+    async fn render(query: &str) -> String {
+        let entry = stories()
+            .iter()
+            .find(|entry| entry.meta.name == "Aligned")
+            .expect("the story is registered");
+        let cx = Cx::default();
+        (entry.render)(&cx, query.to_owned())
+            .await
+            .expect("story renders")
+            .single()
+            .await
+            .expect("story polls")
+            .render(&cx)
+    }
+
+    let html = render("").await;
+    assert!(html.contains("left"), "{html}");
+    assert!(html.contains('2'), "{html}");
+    let html = render("align=center&count=4").await;
+    assert!(html.contains("center"), "{html}");
+    assert!(html.contains('4'), "{html}");
+    assert!(!html.contains('2'), "{html}");
+}
+
+/// A panel taking its title as children. Stories cannot pass markup
+/// through the attribute, so the story is a thin wrapper rendering the
+/// component with inline children.
+#[component]
+async fn panel(
+    #[default] align: Option<&'static str>,
+    #[default] child: Child<'_>,
+) -> Result<impl View> {
+    Ok(view! {
+        <section>
+            (align.unwrap_or("left"))
+            (child)
+        </section>
+    })
+}
+
+/// A panel story with literal children and a knobbed alignment.
+#[story(
+    group = "Shop",
+    component = "Panel",
+    name = "AlignedPanel",
+    params = [select("align", ["left", "center"])],
+    fixtures = [align = "left".to_owned()],
+)]
+#[component]
+async fn panel_aligned(align: String) -> Result<impl View> {
+    Ok(view! {
+        panel(
+            align: if align == "center" { Some("center") } else { None },
+            "Sale ends Sunday"
+        )
+    })
+}
+
+#[tokio::test]
+async fn wrapper_story_renders_children_and_knobs() {
+    use topcoat::{context::Cx, view::ViewExt};
+
+    async fn render(query: &str) -> String {
+        let entry = stories()
+            .iter()
+            .find(|entry| entry.meta.name == "AlignedPanel")
+            .expect("the story is registered");
+        let cx = Cx::default();
+        (entry.render)(&cx, query.to_owned())
+            .await
+            .expect("story renders")
+            .single()
+            .await
+            .expect("story polls")
+            .render(&cx)
+    }
+
+    let html = render("").await;
+    assert!(html.contains("Sale ends Sunday"), "{html}");
+    assert!(html.contains("left"), "{html}");
+    let html = render("align=center").await;
+    assert!(html.contains("center"), "{html}");
+    assert!(!html.contains(">left<"), "{html}");
 }
