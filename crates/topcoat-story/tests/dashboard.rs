@@ -153,6 +153,26 @@ async fn embed_page_renders_story_without_dashboard_chrome() {
 }
 
 #[tokio::test]
+async fn canvas_posts_controls_into_isolated_frame() {
+    let (status, html) = fetch(&router(), "/Shop/Badge/Default?tone=loud").await;
+    assert_eq!(status, 200, "{html}");
+    assert!(html.contains("id=\"story-canvas\""), "{html}");
+    assert!(html.contains("postStoryControl"), "{html}");
+    assert!(html.contains("data-story-post"), "{html}");
+    assert!(!html.contains("<span>badge:"), "{html}");
+}
+
+#[tokio::test]
+async fn embed_page_bridges_hidden_controls_live() {
+    let (status, html) = fetch(&router(), "/Shop/Badge/Default?embed=1&tone=loud&glow=true").await;
+    assert_eq!(status, 200, "{html}");
+    assert!(html.contains("badge:loud true"), "{html}");
+    assert!(html.contains("data-story-control=\"tone\""), "{html}");
+    assert!(html.contains("data-story-control=\"glow\""), "{html}");
+    assert!(html.contains("storyControl"), "{html}");
+}
+
+#[tokio::test]
 async fn manifest_lists_story_urls() {
     let (status, html) = fetch(&router(), "/manifest.json").await;
     assert_eq!(status, 200, "{html}");

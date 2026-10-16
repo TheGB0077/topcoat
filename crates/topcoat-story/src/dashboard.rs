@@ -374,9 +374,74 @@ fn tailwind_stylesheet(config: &AssetConfig) -> Option<String> {
 }
 
 /// Keeps the address bar on the live form's values without navigating.
-/// Control inputs call it on change; the shard re-render answers the
-/// state change, so this only records it for sharing.
+/// Control inputs call it on change; the posted control value answers
+/// the state change, so this only records it for sharing.
 const SYNC_SCRIPT: &str = "function syncStoryUrl(form){var params=new URLSearchParams(new FormData(form));var query=params.toString();history.replaceState(null,'',location.pathname+(query?'?'+query:''));}";
+
+/// JavaScript maps from toolbar preset keys to wrapper styles, generated
+/// from the same Rust constants the server renders for first paint, so
+/// the static preset handlers cannot drift from it.
+fn preset_script_maps() -> String {
+    let mut maps = String::from("var STORY_VIEWPORT_WRAP={");
+    for (key, preset) in [
+        ("full", Viewport::Full),
+        ("desktop", Viewport::Desktop),
+        ("tablet", Viewport::Tablet),
+        ("mobile", Viewport::Mobile),
+    ] {
+        maps.push_str(key);
+        maps.push_str(":'");
+        maps.push_str(preset.wrap().unwrap_or_default());
+        maps.push_str("',");
+    }
+    maps.push_str("};var STORY_FRAME_STYLE={");
+    for (key, preset) in [
+        ("full", Viewport::Full),
+        ("desktop", Viewport::Desktop),
+        ("tablet", Viewport::Tablet),
+        ("mobile", Viewport::Mobile),
+    ] {
+        maps.push_str(key);
+        maps.push_str(":'");
+        maps.push_str(preset.iframe_style());
+        maps.push_str("',");
+    }
+    maps.push_str("};var STORY_BACKDROP={");
+    for (key, preset) in [
+        ("default", Background::Default),
+        ("paper", Background::Paper),
+        ("pine", Background::Pine),
+        ("dark", Background::Dark),
+    ] {
+        maps.push_str(key);
+        maps.push_str(":'");
+        maps.push_str(preset.backdrop().unwrap_or_default());
+        maps.push_str("',");
+    }
+    maps.push_str("};");
+    maps
+}
+
+/// The static parent-to-iframe bridge: control values post into the
+/// embed, preset selects restyle the canvas box, and reported story
+/// heights resize the frame. The parent shard never re-renders for
+/// these, so the iframe is only ever reloaded on navigation.
+fn parent_bridge_script() -> String {
+    let mut script = preset_script_maps();
+    script.push_str("function postStoryControl(input){var frame=document.getElementById('story-canvas');if(!frame||!frame.contentWindow){return;}var msg={key:input.name};if(input.type==='checkbox'){msg.checked=input.checked;msg.value=input.checked?'true':'';}else{msg.value=input.value;}frame.contentWindow.postMessage({storyControl:msg},window.location.origin);}");
+    script.push_str("function resyncStoryControls(form){if(!form){return;}syncStoryUrl(form);var inputs=form.querySelectorAll('[data-story-post]');for(var i=0;i<inputs.length;i++){postStoryControl(inputs[i]);}}");
+    script.push_str("function storyViewport(sel){syncStoryUrl(sel.form);var wrap=document.getElementById('story-wrap');if(wrap){var s=STORY_VIEWPORT_WRAP[sel.value]||'';if(s){wrap.setAttribute('style',s);}else{wrap.removeAttribute('style');}}var frame=document.getElementById('story-canvas');if(frame){frame.setAttribute('style',STORY_FRAME_STYLE[sel.value]||STORY_FRAME_STYLE.full);}}");
+    script.push_str("function storyBackdrop(sel){syncStoryUrl(sel.form);var bg=document.getElementById('story-backdrop');if(bg){var s=STORY_BACKDROP[sel.value]||'';if(s){bg.setAttribute('style',s);}else{bg.removeAttribute('style');}}}");
+    script.push_str("window.addEventListener('message',function(e){if(e.origin!==window.location.origin){return;}if(e.data&&typeof e.data.storyHeight==='number'){var frame=document.getElementById('story-canvas');if(frame){frame.style.height=e.data.storyHeight+'px';}}});");
+    script
+}
+
+/// The embed side of the bridge: parent control values arrive by
+/// `postMessage` and feed the hidden inputs behind the embed's live
+/// region through native change events, which the runtime handles like
+/// any other input change. Heights report back after load and after
+/// every resize so the parent frame tracks content.
+const EMBED_BRIDGE_SCRIPT: &str = "window.addEventListener('message',function(e){if(e.origin!==window.location.origin){return;}var msg=e.data&&e.data.storyControl;if(!msg||!msg.key){return;}var input=document.querySelector('input[data-story-control=\"'+CSS.escape(msg.key)+'\"]');if(!input){return;}if(input.type==='checkbox'){input.checked=!!msg.checked;}else{input.value=msg.value||'';}input.dispatchEvent(new Event('change',{bubbles:true}));});function postStoryHeight(){window.parent.postMessage({storyHeight:document.body.scrollHeight},window.location.origin);}window.addEventListener('load',function(){postStoryHeight();if(window.ResizeObserver&&document.body){new ResizeObserver(postStoryHeight).observe(document.body);}});";
 
 /// The dashboard shell: sidebar registry tree plus the page content.
 /// `current` is the request path, highlighting the open story. `query`
@@ -422,6 +487,7 @@ async fn shell(
                     ></script>
                 }
                 <script>(Unescaped::new_unchecked(SYNC_SCRIPT))</script>
+                <script>(Unescaped::new_unchecked(parent_bridge_script()))</script>
             </head>
             <body
                 style="margin:0;display:flex;min-height:100vh;font-family:system-ui,sans-serif;background:#faf8f5;color:#2c221e"
@@ -573,15 +639,15 @@ enum ControlSignal {
     Toggle(Signal<bool>),
 }
 
-/// The live region: toolbar, canvas, and controls for one story.
+/// The toolbar, canvas, and controls for one story.
 ///
-/// Control inputs write per-control signals, re-rendering only this
-/// shard. The story itself renders isolated in an iframe at the
-/// viewport preset's width, so viewport media queries see a
-/// device-width viewport instead of a narrowed dashboard column; knob
-/// changes reload the frame through its live `src`. A static
-/// `syncStoryUrl` call keeps the address bar on the current values;
-/// without JavaScript the form submits normally.
+/// The story renders isolated in an iframe at the viewport preset's
+/// width, so viewport media queries see a device-width viewport
+/// instead of a narrowed dashboard column. Control inputs post their
+/// values into the iframe, where the embed's own live region patches
+/// the story in place without navigation, so story-local state
+/// survives knob changes. Static `syncStoryUrl` calls keep the
+/// address bar on the current values for sharing.
 #[shard]
 async fn canvas(
     cx: &Cx,
@@ -592,9 +658,6 @@ async fn canvas(
 ) -> Result<impl View> {
     struct Live {
         entry: &'static StoryEntry,
-        viewport: Signal<String>,
-        bg: Signal<String>,
-        states: Vec<ControlSignal>,
         viewport_preset: Viewport,
         bg_preset: Background,
         reset_url: String,
@@ -606,48 +669,8 @@ async fn canvas(
     let live = match find(&group, &component, &name) {
         None => None,
         Some(entry) => {
-            let viewport = signal(&cx.keyed("toolbar:viewport"), || {
-                query_value(Some(&query), "viewport").unwrap_or_else(|| "full".to_owned())
-            });
-            let bg = signal(&cx.keyed("toolbar:bg"), || {
-                query_value(Some(&query), "bg").unwrap_or_else(|| "default".to_owned())
-            });
-
-            let mut states = Vec::new();
-            for param in entry.meta.params {
-                let keyed = cx.keyed(format!("control:{}", param.name));
-                match param.kind {
-                    ParamKind::Select(_) | ParamKind::Global(_) | ParamKind::Text => {
-                        let initial = query_value(Some(&query), param.name).unwrap_or_default();
-                        states.push(ControlSignal::Text(signal(&keyed, || initial)));
-                    }
-                    ParamKind::Toggle => {
-                        let initial =
-                            query_value(Some(&query), param.name).as_deref() == Some("true");
-                        states.push(ControlSignal::Toggle(signal(&keyed, || initial)));
-                    }
-                }
-            }
-
-            let viewport_preset = Viewport::parse(Some(viewport.get()).as_deref());
-            let bg_preset = Background::parse(Some(bg.get()).as_deref());
-
-            let mut pairs = Vec::new();
-            for (param, state) in entry.meta.params.iter().zip(&states) {
-                match state {
-                    ControlSignal::Text(value) => {
-                        let value = value.get();
-                        if !value.is_empty() {
-                            pairs.push((param.name.to_owned(), value));
-                        }
-                    }
-                    ControlSignal::Toggle(value) => {
-                        if value.get() {
-                            pairs.push((param.name.to_owned(), "true".to_owned()));
-                        }
-                    }
-                }
-            }
+            let viewport_preset = Viewport::parse(query_value(Some(&query), "viewport").as_deref());
+            let bg_preset = Background::parse(query_value(Some(&query), "bg").as_deref());
             let reset_url = format!(
                 "{}{}",
                 story_url(entry.meta.group, entry.meta.component, entry.meta.name),
@@ -676,7 +699,22 @@ async fn canvas(
                     .query()
                     .map(|(key, value)| (key.to_owned(), value.to_owned())),
             );
-            state.extend(pairs.iter().cloned());
+            for param in entry.meta.params {
+                match param.kind {
+                    ParamKind::Select(_) | ParamKind::Global(_) | ParamKind::Text => {
+                        if let Some(value) = query_value(Some(&query), param.name)
+                            && !value.is_empty()
+                        {
+                            state.push((param.name.to_owned(), value));
+                        }
+                    }
+                    ParamKind::Toggle => {
+                        if query_value(Some(&query), param.name).as_deref() == Some("true") {
+                            state.push((param.name.to_owned(), "true".to_owned()));
+                        }
+                    }
+                }
+            }
             state.extend(carry_over.iter().filter(|(key, _)| key != "q").cloned());
             for (key, value) in &state {
                 embed_src.push('&');
@@ -687,9 +725,6 @@ async fn canvas(
 
             Some(Live {
                 entry,
-                viewport,
-                bg,
-                states,
                 viewport_preset,
                 bg_preset,
                 reset_url,
@@ -705,9 +740,6 @@ async fn canvas(
             Some(
                 Live {
                     entry,
-                    viewport,
-                    bg,
-                    states,
                     viewport_preset,
                     bg_preset,
                     reset_url,
@@ -751,7 +783,12 @@ async fn canvas(
                         }
                     </form>
                 }
-                <form method="get" action="" onsubmit="return false">
+                <form
+                    id="story-controls"
+                    method="get"
+                    action=""
+                    onsubmit="return false"
+                >
                     for (key, value) in carry_over {
                         <input type="hidden" name=(key) value=(value)>
                     }
@@ -766,28 +803,30 @@ async fn canvas(
                             </div>
                             <select
                                 name="viewport"
-                                onchange="syncStoryUrl(this.form)"
+                                onchange="storyViewport(this)"
                                 style="padding:4px 8px;font-size:13px;border:1px solid #e5e0d8;border-radius:6px;background:#fff"
-                                @change=$(|event: Event| viewport.set(event.target.value))
                             >
-                                <option value="full" selected=(viewport.get() == "full")>
+                                <option
+                                    value="full"
+                                    selected=(viewport_preset == Viewport::Full)
+                                >
                                     "Full width"
                                 </option>
                                 <option
                                     value="desktop"
-                                    selected=(viewport.get() == "desktop")
+                                    selected=(viewport_preset == Viewport::Desktop)
                                 >
                                     "Desktop 1024"
                                 </option>
                                 <option
                                     value="tablet"
-                                    selected=(viewport.get() == "tablet")
+                                    selected=(viewport_preset == Viewport::Tablet)
                                 >
                                     "Tablet 768"
                                 </option>
                                 <option
                                     value="mobile"
-                                    selected=(viewport.get() == "mobile")
+                                    selected=(viewport_preset == Viewport::Mobile)
                                 >
                                     "Mobile 375"
                                 </option>
@@ -801,20 +840,31 @@ async fn canvas(
                             </div>
                             <select
                                 name="bg"
-                                onchange="syncStoryUrl(this.form)"
+                                onchange="storyBackdrop(this)"
                                 style="padding:4px 8px;font-size:13px;border:1px solid #e5e0d8;border-radius:6px;background:#fff"
-                                @change=$(|event: Event| bg.set(event.target.value))
                             >
-                                <option value="default" selected=(bg.get() == "default")>
+                                <option
+                                    value="default"
+                                    selected=(bg_preset == Background::Default)
+                                >
                                     "Frame default"
                                 </option>
-                                <option value="paper" selected=(bg.get() == "paper")>
+                                <option
+                                    value="paper"
+                                    selected=(bg_preset == Background::Paper)
+                                >
                                     "Paper"
                                 </option>
-                                <option value="pine" selected=(bg.get() == "pine")>
+                                <option
+                                    value="pine"
+                                    selected=(bg_preset == Background::Pine)
+                                >
                                     "Pine"
                                 </option>
-                                <option value="dark" selected=(bg.get() == "dark")>
+                                <option
+                                    value="dark"
+                                    selected=(bg_preset == Background::Dark)
+                                >
                                     "Dark"
                                 </option>
                             </select>
@@ -841,13 +891,14 @@ async fn canvas(
                         </a>
                     </div>
 
-                    <div style=(viewport_preset.wrap())>
-                        <div style=(bg_preset.backdrop())>
+                    <div id="story-wrap" style=(viewport_preset.wrap())>
+                        <div id="story-backdrop" style=(bg_preset.backdrop())>
                             <iframe
+                                id="story-canvas"
                                 title=(entry.meta.name)
                                 src=(embed_src)
                                 style=(viewport_preset.iframe_style())
-                                onload="this.style.height=this.contentDocument.body.scrollHeight+'px'"
+                                onload="this.style.height=this.contentDocument.body.scrollHeight+'px';resyncStoryControls(document.getElementById('story-controls'))"
                             ></iframe>
                         </div>
                     </div>
@@ -881,54 +932,53 @@ async fn canvas(
                                     </tr>
                                 }
                             </table>
-                            for (param, state) in entry.meta.params.iter().zip(states) {
-                                match state {
-                                    ControlSignal::Text(handle) => {
-                                        match param.kind {
-                                            ParamKind::Select(options) | ParamKind::Global(options) => {
-                                                <div
-                                                    style="display:flex;align-items:center;gap:8px;margin-bottom:8px"
-                                                >
-                                                    <span style="width:140px;font-size:13px;font-weight:600">
-                                                        (param.name)
-                                                    </span>
-                                                    <select
-                                                        name=(param.name)
-                                                        onchange="syncStoryUrl(this.form)"
-                                                        style="flex:1;padding:4px 8px;font-size:13px;border:1px solid #e5e0d8;border-radius:6px;background:#fff"
-                                                        @change=$(|event: Event| handle.set(event.target.value))
+                            for param in entry.meta.params {
+                                match param.kind {
+                                    ParamKind::Select(options) | ParamKind::Global(options) => {
+                                        <div
+                                            style="display:flex;align-items:center;gap:8px;margin-bottom:8px"
+                                        >
+                                            <span style="width:140px;font-size:13px;font-weight:600">
+                                                (param.name)
+                                            </span>
+                                            <select
+                                                name=(param.name)
+                                                data-story-post="1"
+                                                onchange="syncStoryUrl(this.form);postStoryControl(this)"
+                                                style="flex:1;padding:4px 8px;font-size:13px;border:1px solid #e5e0d8;border-radius:6px;background:#fff"
+                                            >
+                                                for option in options {
+                                                    <option
+                                                        value=(option)
+                                                        selected=(query_value(Some(&query), param.name).as_deref()
+                                                            == Some(*option))
                                                     >
-                                                        for option in options {
-                                                            <option
-                                                                value=(option)
-                                                                selected=(handle.get().as_str() == *option)
-                                                            >
-                                                                (option)
-                                                            </option>
-                                                        }
-                                                    </select>
-                                                </div>
-                                            }
-                                            _ => {
-                                                <div
-                                                    style="display:flex;align-items:center;gap:8px;margin-bottom:8px"
-                                                >
-                                                    <span style="width:140px;font-size:13px;font-weight:600">
-                                                        (param.name)
-                                                    </span>
-                                                    <input
-                                                        type="text"
-                                                        name=(param.name)
-                                                        value=(handle.get())
-                                                        onchange="syncStoryUrl(this.form)"
-                                                        style="flex:1;padding:4px 8px;font-size:13px;border:1px solid #e5e0d8;border-radius:6px"
-                                                        @change=$(|event: Event| handle.set(event.target.value))
-                                                    >
-                                                </div>
-                                            }
-                                        }
+                                                        (option)
+                                                    </option>
+                                                }
+                                            </select>
+                                        </div>
                                     }
-                                    ControlSignal::Toggle(handle) => {
+                                    ParamKind::Text => {
+                                        <div
+                                            style="display:flex;align-items:center;gap:8px;margin-bottom:8px"
+                                        >
+                                            <span style="width:140px;font-size:13px;font-weight:600">
+                                                (param.name)
+                                            </span>
+                                            <input
+                                                type="text"
+                                                name=(param.name)
+                                                data-story-post="1"
+                                                value=(query_value(Some(&query), param.name).unwrap_or_default(
+
+                                                ))
+                                                onchange="syncStoryUrl(this.form);postStoryControl(this)"
+                                                style="flex:1;padding:4px 8px;font-size:13px;border:1px solid #e5e0d8;border-radius:6px"
+                                            >
+                                        </div>
+                                    }
+                                    ParamKind::Toggle => {
                                         <div
                                             style="display:flex;align-items:center;gap:8px;margin-bottom:8px"
                                         >
@@ -938,17 +988,19 @@ async fn canvas(
                                             <input
                                                 type="checkbox"
                                                 name=(param.name)
+                                                data-story-post="1"
                                                 value="true"
-                                                checked=(handle.get())
-                                                onchange="syncStoryUrl(this.form)"
-                                                @change=$(|event: Event| handle.set(event.target.checked))
+                                                checked=(query_value(Some(&query), param.name).as_deref()
+                                                    == Some("true"))
+                                                onchange="syncStoryUrl(this.form);postStoryControl(this)"
                                             >
                                         </div>
                                     }
                                 }
                             }
                             <button
-                                type="submit"
+                                type="button"
+                                onclick="resyncStoryControls(this.form)"
                                 style="margin-top:8px;padding:6px 16px;font-size:13px;font-weight:700;border:1px solid #e5e0d8;border-radius:6px;background:#fff;cursor:pointer"
                             >
                                 "Apply"
@@ -1041,35 +1093,115 @@ fn story_page_view(cx: &Cx) -> Result<impl View> {
     })
 }
 
+/// The story live region inside the embed document: per-control signals
+/// initialized from the query, the story render, and one hidden input
+/// per control. The parent dashboard posts control values here, and the
+/// hidden inputs feed them into the signals, so knob changes patch the
+/// story in place without navigation and story-local state survives.
+#[shard]
+async fn embed_canvas(
+    cx: &Cx,
+    group: String,
+    component: String,
+    name: String,
+    query: String,
+) -> Result<impl View> {
+    struct Live<'a> {
+        entry: &'static StoryEntry,
+        states: Vec<ControlSignal>,
+        rendered: BoxView<'a>,
+    }
+
+    let live = match find(&group, &component, &name) {
+        None => None,
+        Some(entry) => {
+            let mut states = Vec::new();
+            for param in entry.meta.params {
+                let keyed = cx.keyed(format!("embed:{}", param.name));
+                match param.kind {
+                    ParamKind::Select(_) | ParamKind::Global(_) | ParamKind::Text => {
+                        let initial = query_value(Some(&query), param.name).unwrap_or_default();
+                        states.push(ControlSignal::Text(signal(&keyed, || initial)));
+                    }
+                    ParamKind::Toggle => {
+                        let initial =
+                            query_value(Some(&query), param.name).as_deref() == Some("true");
+                        states.push(ControlSignal::Toggle(signal(&keyed, || initial)));
+                    }
+                }
+            }
+            let mut pairs = Vec::new();
+            for (param, state) in entry.meta.params.iter().zip(&states) {
+                match state {
+                    ControlSignal::Text(value) => {
+                        let value = value.get();
+                        if !value.is_empty() {
+                            pairs.push((param.name.to_owned(), value));
+                        }
+                    }
+                    ControlSignal::Toggle(value) => {
+                        if value.get() {
+                            pairs.push((param.name.to_owned(), "true".to_owned()));
+                        }
+                    }
+                }
+            }
+            let effective = serde_urlencoded::to_string(&pairs).unwrap_or_default();
+            let rendered = (entry.render)(cx, effective).await?;
+            Some(Live {
+                entry,
+                states,
+                rendered,
+            })
+        }
+    };
+    Ok(view! {
+        cx =>
+        match live {
+            Some(Live { entry, states, rendered }) => {
+                for (param, state) in entry.meta.params.iter().zip(states) {
+                    match state {
+                        ControlSignal::Text(handle) => {
+                            <input
+                                type="hidden"
+                                name=(param.name)
+                                value=(handle.get())
+                                data-story-control=(param.name)
+                                @change=$(|event: Event| handle.set(event.target.value))
+                            >
+                        }
+                        ControlSignal::Toggle(handle) => {
+                            <input
+                                type="checkbox"
+                                style="display:none"
+                                name=(param.name)
+                                value="true"
+                                checked=(handle.get())
+                                data-story-control=(param.name)
+                                @change=$(|event: Event| handle.set(event.target.checked))
+                            >
+                        }
+                    }
+                }
+                frame_body(frame: entry.meta.frame, (rendered))
+            }
+            None => {
+                <p>"Unknown story."</p>
+            }
+        }
+    })
+}
+
 /// One story rendered standalone for the canvas iframe and real-device
-/// testing: the story in its frame, without dashboard chrome. Toolbar
-/// presets stay dashboard canvas chrome, so only control and global
-/// values cross over, read from the same query keys.
-async fn embed_view(cx: &Cx) -> Result<impl View> {
+/// testing: the story in its frame, without dashboard chrome. Control
+/// and global values initialize from the same query keys; the parent
+/// dashboard posts later changes into the live region.
+fn embed_view(cx: &Cx) -> Result<impl View> {
     let group = path_param::<Group>(cx);
     let component = path_param::<Component>(cx);
     let name = path_param::<StoryName>(cx);
     let entry: &'static StoryEntry = find(group, component, name).ok_or_not_found()?;
-    let query = uri(cx).query().unwrap_or_default();
-    let mut pairs = Vec::new();
-    for param in entry.meta.params {
-        match param.kind {
-            ParamKind::Select(_) | ParamKind::Global(_) | ParamKind::Text => {
-                if let Some(value) = query_value(Some(query), param.name)
-                    && !value.is_empty()
-                {
-                    pairs.push((param.name.to_owned(), value));
-                }
-            }
-            ParamKind::Toggle => {
-                if query_value(Some(query), param.name).as_deref() == Some("true") {
-                    pairs.push((param.name.to_owned(), "true".to_owned()));
-                }
-            }
-        }
-    }
-    let effective = serde_urlencoded::to_string(&pairs).unwrap_or_default();
-    let rendered = (entry.render)(cx, effective).await?;
+    let query = uri(cx).query().unwrap_or_default().to_owned();
     let assets = try_app_context::<AssetConfig>(cx);
     let stylesheet = assets.and_then(tailwind_stylesheet);
     let live = assets.is_some();
@@ -1094,9 +1226,15 @@ async fn embed_view(cx: &Cx) -> Result<impl View> {
                         data-topcoat-usize-bits=(usize::BITS)
                     ></script>
                 }
+                <script>(Unescaped::new_unchecked(EMBED_BRIDGE_SCRIPT))</script>
             </head>
             <body style="margin:0">
-                frame_body(frame: entry.meta.frame, (rendered))
+                embed_canvas(
+                    group: group.to_owned(),
+                    component: component.to_owned(),
+                    name: name.to_owned(),
+                    query: query
+                )
             </body>
         </html>
     })
@@ -1159,7 +1297,7 @@ fn story_page_route(cx: &Cx, _body: Body) -> BoxView<'_> {
             .query()
             .is_some_and(|query| query_value(Some(query), "embed").is_some());
         if embed {
-            Ok(embed_view(cx).await?.boxed())
+            Ok(embed_view(cx)?.boxed())
         } else {
             Ok(story_page_view(cx)?.boxed())
         }
@@ -1188,6 +1326,7 @@ impl RouterBuilderDashboardExt for RouterBuilder {
             ))
             .route(RouteFn::new(Method::GET, "/manifest.json", manifest))
             .route(canvas)
+            .route(embed_canvas)
     }
 }
 
@@ -1261,6 +1400,30 @@ mod tests {
             html.contains("/Probe/Canvas/Query?embed=1&amp;tone=loud"),
             "{html}"
         );
+        assert!(html.contains("id=\"story-canvas\""), "{html}");
+        assert!(html.contains("postStoryControl"), "{html}");
+        assert!(html.contains("data-story-post"), "{html}");
+        assert!(!html.contains(">probe<"), "{html}");
+    }
+
+    #[tokio::test]
+    async fn embed_canvas_feeds_signals_through_hidden_inputs() {
+        let cx = Cx::default();
+        let html = view! {
+            cx =>
+            embed_canvas(
+                group: "Probe".to_owned(),
+                component: "Canvas".to_owned(),
+                name: "Query".to_owned(),
+                query: "tone=loud".to_owned()
+            )
+        }
+        .first()
+        .await
+        .expect("shard renders")
+        .render(&cx);
+        assert!(html.contains(">probe<"), "{html}");
+        assert!(html.contains("data-story-control=\"tone\""), "{html}");
     }
 
     #[test]
@@ -1274,6 +1437,35 @@ mod tests {
         );
         assert!(Viewport::Tablet.iframe_style().contains("max-width:768px"));
         assert!(Viewport::Mobile.iframe_style().contains("max-width:375px"));
+    }
+
+    #[test]
+    fn bridge_script_maps_match_server_styles() {
+        let script = parent_bridge_script();
+        for preset in [
+            Viewport::Full,
+            Viewport::Desktop,
+            Viewport::Tablet,
+            Viewport::Mobile,
+        ] {
+            assert!(script.contains(preset.iframe_style()), "{script}");
+            if let Some(wrap) = preset.wrap() {
+                assert!(script.contains(wrap), "{script}");
+            }
+        }
+        for preset in [
+            Background::Default,
+            Background::Paper,
+            Background::Pine,
+            Background::Dark,
+        ] {
+            if let Some(backdrop) = preset.backdrop() {
+                assert!(script.contains(backdrop), "{script}");
+            }
+        }
+        assert!(script.contains("postStoryControl"), "{script}");
+        assert!(script.contains("storyControl"), "{script}");
+        assert!(script.contains("storyHeight"), "{script}");
     }
 
     inventory::submit! {
