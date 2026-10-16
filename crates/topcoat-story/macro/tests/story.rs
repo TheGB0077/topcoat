@@ -34,6 +34,7 @@ fn story_registers_in_stories() {
     assert_eq!(entry.meta.description, "A plain card.");
     assert_eq!(entry.meta.frame, Frame::Padded);
     assert!(entry.meta.source_file.ends_with("tests/story.rs"));
+    assert!(entry.meta.source.contains("async fn badge_default"));
     assert_eq!(entry.meta.params.len(), 2);
     assert_eq!(entry.meta.params[0].name, "tone");
     assert_eq!(

@@ -61,6 +61,10 @@ pub struct StoryMeta {
     pub frame: Frame,
     /// Path of the file holding the story, for the source panel.
     pub source_file: &'static str,
+    /// The story function's source as written, for the source panel.
+    /// Rendered with the `collect` feature only; other builds emit an
+    /// empty snippet. Shown collapsed behind "Show code".
+    pub source: &'static str,
     /// Controls panel schema; empty when the story takes no controls.
     pub params: &'static [ParamDef],
 }
@@ -205,6 +209,7 @@ mod tests {
                 description: "",
                 frame: Frame::Padded,
                 source_file: file!(),
+                source: "",
                 params: &[],
             },
             render: blank,
@@ -220,6 +225,7 @@ mod tests {
                 description: "",
                 frame: Frame::Bare,
                 source_file: file!(),
+                source: "",
                 params: &[],
             },
             render: blank,
@@ -235,6 +241,7 @@ mod tests {
                 description: "",
                 frame: Frame::Padded,
                 source_file: file!(),
+                source: "",
                 params: &[],
             },
             render: blank,

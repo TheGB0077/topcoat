@@ -320,32 +320,6 @@ fn sidebar_tree(filter: Option<&str>) -> Vec<SidebarGroup> {
     tree
 }
 
-/// Reads a registry source file for the source panel.
-///
-/// Registry paths are workspace-relative, while the server's working
-/// directory is not one fixed place, so this searches the working
-/// directory's and the running binary's ancestor directories for the
-/// file. Installed binaries far from their sources find nothing, and
-/// the panel says so.
-fn read_source(source_file: &str) -> Option<String> {
-    let direct = Path::new(source_file);
-    if let Ok(source) = std::fs::read_to_string(direct) {
-        return Some(source);
-    }
-    let roots = std::env::current_dir()
-        .ok()
-        .into_iter()
-        .chain(std::env::current_exe().ok());
-    for root in roots {
-        for ancestor in root.ancestors() {
-            if let Ok(source) = std::fs::read_to_string(ancestor.join(source_file)) {
-                return Some(source);
-            }
-        }
-    }
-    None
-}
-
 /// Whether a bundled filename is the generated Tailwind stylesheet.
 ///
 /// Tailwind's build writes `tailwind.css` by default, which the bundler
@@ -1076,18 +1050,16 @@ fn story_page_view(cx: &Cx) -> Result<impl View> {
             <section style="margin-top:24px">
                 <h2>"Source"</h2>
                 <p style="color:#8a7a6d;font-size:13px">(entry.meta.source_file)</p>
-                match read_source(entry.meta.source_file) {
-                    Some(source) => {
-                        <pre
-                            style="background:#2c221e;color:#faf8f5;padding:16px;border-radius:12px;overflow-x:auto;font-size:12px"
-                        >
-                            (source)
-                        </pre>
-                    }
-                    None => {
-                        <p>"Source is unavailable away from the workspace."</p>
-                    }
-                }
+                <details>
+                    <summary style="font-size:13px;font-weight:600;cursor:pointer">
+                        "Show code"
+                    </summary>
+                    <pre
+                        style="background:#2c221e;color:#faf8f5;padding:16px;border-radius:12px;overflow-x:auto;font-size:12px"
+                    >
+                        (entry.meta.source)
+                    </pre>
+                </details>
             </section>
         )
     })
@@ -1348,12 +1320,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn reads_registry_sources_from_ancestor_directories() {
-        let source = read_source("crates/topcoat-story/src/dashboard.rs").expect("source resolves");
-        assert!(source.contains("source panel"));
-    }
-
     /// A probe story rendering static content, submitted straight to
     /// the registry without the macro. Exercises shard-inline rendering
     /// with no router involved.
@@ -1370,6 +1336,7 @@ mod tests {
                 description: "",
                 frame: Frame::Padded,
                 source_file: file!(),
+                source: "probe source",
                 params: &[ParamDef {
                     name: "tone",
                     kind: ParamKind::Text,
@@ -1477,6 +1444,7 @@ mod tests {
                 description: "",
                 frame: Frame::Padded,
                 source_file: file!(),
+                source: "localized source",
                 params: &[
                     ParamDef {
                         name: "locale",
