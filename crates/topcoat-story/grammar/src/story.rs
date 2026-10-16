@@ -284,6 +284,26 @@ impl StoryItem {
         }
         lines.join("\n")
     }
+
+    /// The story function's source for the dashboard's code panel: the
+    /// item as written, formatted. Only rendered with the `collect`
+    /// feature, alongside registration; other builds emit an empty
+    /// snippet and carry no formatter.
+    #[cfg(feature = "collect")]
+    fn source(&self) -> String {
+        prettyplease::unparse(&syn::File {
+            shebang: None,
+            frontmatter: None,
+            attrs: Vec::new(),
+            items: vec![syn::Item::Fn(self.item.clone())],
+        })
+    }
+
+    /// The story function's source for the dashboard's code panel.
+    #[cfg(not(feature = "collect"))]
+    fn source(&self) -> String {
+        String::new()
+    }
 }
 
 impl Parse for StoryItem {
@@ -527,6 +547,7 @@ impl ToTokens for Story {
         let name = &attr.name;
         let frame = attr.frame();
         let description = LitStr::new(&story.description(), Span::call_site());
+        let source = LitStr::new(&story.source(), Span::call_site());
         let params = &attr.params;
 
         let mut setters = Vec::new();
@@ -645,6 +666,7 @@ impl ToTokens for Story {
                                 description: #description,
                                 frame: #frame,
                                 source_file: ::core::file!(),
+                                source: #source,
                                 params: &[#(#params),*],
                             },
                             render,

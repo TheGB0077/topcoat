@@ -60,7 +60,10 @@ without the key ignore it; the toolbar only appears when at least one
 story declares a global.
 
 The doc comment becomes the story description, and the registry records
-the file holding the story for the source panel.
+the file holding the story plus the function's formatted source for the
+source panel, shown collapsed behind "Show code". The snippet is
+rendered with the `collect` feature only; other builds record an empty
+string.
 
 The annotated function passes through untouched, so `#[story]` composes
 with `#[component]` and any other attribute. The story function must be a
