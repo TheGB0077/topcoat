@@ -142,6 +142,80 @@ fn products_link(cx: &Cx) -> impl View {
 }
 ```
 
+# View Transitions
+
+Set `vt` to run the navigation inside a [View Transition], giving the page a typed name your stylesheet can target:
+
+```rust
+# use topcoat::{router::href, runtime::link, view::view};
+# #[topcoat::router::page("/products")]
+# async fn products() -> topcoat::Result<impl topcoat::view::View> { Ok(view! { "Products" }) }
+# #[topcoat::view::component]
+# async fn example() -> topcoat::Result<impl topcoat::view::View> {
+Ok(view! {
+    link(href: href!(products), vt: "detail", "Products")
+})
+# }
+```
+
+Separate multiple types with a space. The browser animates from the old page to the new one, and `:active-view-transition-type()` selectors and `::view-transition-*` rules match while it runs:
+
+```css
+:root:active-view-transition-type(detail)::view-transition-old(root) {
+    animation: fade-out 0.2s ease both;
+}
+```
+
+Transitions need browser support. The runtime skips them where the API is missing or the visitor prefers reduced motion, and the navigation still happens either way. It also falls back to an untyped transition on browsers that support transitions but not transition types, so the page still animates, and only your typed keyframes are skipped.
+
+# Shared Elements
+
+By default the whole page cross-fades. To morph one element into another instead, name it on both sides with [`view-transition-name`][vt-name]. Give the link a `vt_shared`:
+
+```rust
+# use topcoat::{router::href, runtime::link, view::view};
+# #[topcoat::router::page("/products")]
+# async fn products() -> topcoat::Result<impl topcoat::view::View> { Ok(view! { "Products" }) }
+# #[topcoat::view::component]
+# async fn example() -> topcoat::Result<impl topcoat::view::View> {
+# let id = 7;
+Ok(view! {
+    link(
+        href: href!(products),
+        vt: "detail",
+        vt_shared: format!("product-{id}"),
+        <img src="/products/shoes.jpg" alt="Shoes" />
+    )
+})
+# }
+```
+
+The destination's matching element carries the same name in its style:
+
+```rust
+# use topcoat::{context::Cx, view::view};
+# use topcoat::view::View;
+# #[topcoat::view::component]
+# async fn hero(cx: &Cx) -> topcoat::Result<impl View> {
+# let id = 7;
+Ok(view! {
+    <img
+        src="/products/shoes.jpg"
+        alt="Shoes"
+        style=(format!("view-transition-name: product-{id}"))
+    />
+})
+# }
+```
+
+The runtime applies the name to the link's first `<img>`, or to the anchor when it has no image. It holds the name only while the transition runs, so you never write that logic or clean it up.
+
+A name must be unique among the elements rendered when the transition starts, because two elements sharing one makes the browser skip the animation. Derive the name from whatever identifies the item, so a page that shows the same item more than once does not repeat it.
+
+[view-transition-name]: https://developer.mozilla.org/docs/Web/CSS/view-transition-name
+
+For your own `<a>` markup, use [`VT_ATTRIBUTE`] and [`VT_SHARED_ATTRIBUTE`] with `attrs`.
+
 # Navigation Behavior
 
 The current page stays visible until the destination's initial HTML arrives. The runtime updates the document, including its title, then applies any streamed content that follows. Signals declared on both pages keep their values. This lets shared components retain state across navigation.
@@ -151,4 +225,6 @@ Navigation updates the address bar and browser history. New pages scroll to the 
 Modifier clicks, downloads, external links, and links targeting another window or frame also retain their normal browser behavior. If a destination needs scripts that have not been loaded, or its response cannot be used for runtime navigation, the browser loads the page normally.
 
 [`href!`]: https://docs.rs/topcoat/latest/topcoat/router/macro.href.html
+[View Transition]: https://developer.mozilla.org/docs/Web/API/View_Transition
+[vt-name]: https://developer.mozilla.org/docs/Web/CSS/view-transition-name
 [runtime setup guide]: https://docs.rs/topcoat/latest/topcoat/runtime/index.html#setup

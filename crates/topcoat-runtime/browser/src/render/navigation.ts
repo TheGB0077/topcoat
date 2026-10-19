@@ -1,12 +1,25 @@
 import type { Runtime } from "../runtime";
 import { newRender, type RenderToken } from "./frames";
 import { PageRequest, type PageResponseHead, PrefetchCache } from "./prefetch";
+import {
+	startTypedTransition,
+	VT_SHARED_ATTRIBUTE,
+	VT_SHARED_CLASS,
+	vtTypesOf,
+} from "./view-transition";
 
 /**
  * Enables runtime navigation on a link. The value sets when to prefetch:
  * `never`, `intent`, or `viewport`.
  */
 export const LINK_ATTRIBUTE = "data-topcoat-link";
+
+/**
+ * Event name dispatched on the document once a runtime navigation has
+ * replaced the page. A page update does not run the scripts it brings, so
+ * scripts outside the runtime have no other signal that the swap happened.
+ */
+export const NAVIGATE_EVENT = "topcoat:navigate";
 
 /** The hover delay before loading a linked page, in milliseconds. */
 const INTENT_DELAY = 80;
@@ -20,6 +33,14 @@ const STATE_KEY = "topcoat";
  * existing entry after the user goes back or forward.
  */
 type HistoryMode = "push" | "replace" | "traverse";
+
+/** What a `NAVIGATE_EVENT` listener learns about the new page. */
+export type NavigateDetail = {
+	/** The URL the document now shows. */
+	url: string;
+	/** How the document reached the new URL. */
+	mode: HistoryMode;
+};
 
 type ScrollPosition = { x: number; y: number };
 
@@ -56,6 +77,14 @@ export class NavigationController {
 	private streaming: Promise<void> | null = null;
 	/** The current page's URL with the # fragment removed. */
 	private documentUrl = "";
+	/** The shared waiting to be named for the current view transition. */
+	private stamped: {
+		el: HTMLElement;
+		name: string;
+		class: string;
+		/** The navigation that stamped it, so only that one may release it. */
+		generation: number;
+	} | null = null;
 	/** Scripts already loaded in this document. */
 	private readonly scripts = new Set<string>();
 	/** Whether this controller is responsible for restoring scroll positions. */
@@ -185,6 +214,7 @@ export class NavigationController {
 		url: URL,
 		mode: HistoryMode,
 		scroll: ScrollPosition | null = null,
+		vtTypes: string[] | null = null,
 	): Promise<void> {
 		this.generation += 1;
 		const generation = this.generation;
@@ -204,10 +234,21 @@ export class NavigationController {
 		const isCurrent = () =>
 			generation === this.generation && !this.controller.signal.aborted;
 		try {
-			await this.follow(request, url, mode, scroll, isCurrent);
+			await this.follow(
+				request,
+				url,
+				mode,
+				scroll,
+				isCurrent,
+				vtTypes,
+				generation,
+			);
 		} finally {
 			if (this.uncommitted === request) this.uncommitted = null;
 			if (this.streaming === streaming) this.streaming = null;
+			// The previous navigation settles after this one replaced it, so it
+			// releases only the stamp it owns.
+			this.clearStamp(generation);
 			finish();
 		}
 	}
@@ -219,6 +260,8 @@ export class NavigationController {
 		mode: HistoryMode,
 		scroll: ScrollPosition | null,
 		isCurrent: () => boolean,
+		vtTypes: string[] | null,
+		generation: number,
 	): Promise<void> {
 		let head: PageResponseHead;
 		try {
@@ -257,9 +300,29 @@ export class NavigationController {
 							load(destination, mode);
 							return;
 						}
-						this.commit(next, destination, mode, scroll, render);
-						if (this.uncommitted === request) this.uncommitted = null;
-						committed = true;
+						const apply = () => {
+							this.commit(next, destination, mode, scroll, render);
+							if (this.uncommitted === request) this.uncommitted = null;
+							committed = true;
+						};
+						if (vtTypes === null) {
+							apply();
+							break;
+						}
+						// Awaiting the transition's own update keeps `committed`
+						// true before the loop consumes the next frame, so
+						// streamed frames never race the swap; frames that
+						// follow apply after the transition captured, outside
+						// its groups. A superseded navigation resolves without
+						// swapping: the loop's next check returns.
+						await startTypedTransition(vtTypes, () => {
+							if (isCurrent()) apply();
+						});
+						// The new page is captured by now, so the origin's name
+						// has done its job. Holding it would leave the two
+						// shared elements colliding for the animation's
+						// duration.
+						this.clearStamp(generation);
 						break;
 					}
 					case "swap":
@@ -350,6 +413,13 @@ export class NavigationController {
 			window.scrollTo(0, 0);
 		}
 		resetFocus(target);
+		// Listeners rebind against a settled document: by here the new page is
+		// in place and the URL, scroll position, and focus are already set.
+		document.dispatchEvent(
+			new CustomEvent<NavigateDetail>(NAVIGATE_EVENT, {
+				detail: { url: url.href, mode },
+			}),
+		);
 	}
 
 	private onClick(event: MouseEvent): void {
@@ -368,8 +438,64 @@ export class NavigationController {
 		const url = this.destination(link);
 		if (url === null) return;
 		event.preventDefault();
+		const vtTypes = vtTypesOf(link);
+		// Name the shared element before anything is fetched: the origin is what the
+		// transition snapshots, so the stamp has to be in place by the time
+		// the response commits, and only a click can say which one.
+		this.stamp(link, vtTypes);
 		// Reuse the history entry when opening the current URL again.
-		void this.navigate(url, url.href === location.href ? "replace" : "push");
+		void this.navigate(
+			url,
+			url.href === location.href ? "replace" : "push",
+			null,
+			vtTypes,
+		);
+	}
+
+	/**
+	 * Names the shared element inside `link`. Only a link that declares
+	 * transition types gets one: without a transition the name would sit on
+	 * the page until the next click.
+	 *
+	 * The previous stamp is released first, because two rendered elements
+	 * sharing a `view-transition-name` makes the transition skip itself. The
+	 * stamp records the generation of the navigation about to open, so a
+	 * superseded navigation settling later cannot release a newer one.
+	 */
+	private stamp(link: HTMLAnchorElement, types: string[] | null): void {
+		this.clearStamp();
+		const name = link.getAttribute(VT_SHARED_ATTRIBUTE);
+		if (types === null || name === null || name === "") return;
+		const shared = link.querySelector("img") ?? link;
+		// Restore what was inline before, so a shared element the server
+		// already names keeps its own name once the transition is done.
+		this.stamped = {
+			el: shared,
+			name: shared.style.getPropertyValue("view-transition-name"),
+			class: shared.style.getPropertyValue("view-transition-class"),
+			generation: this.generation + 1,
+		};
+		shared.style.setProperty("view-transition-name", name);
+		shared.style.setProperty("view-transition-class", VT_SHARED_CLASS);
+	}
+
+	/** Takes back the name this controller stamped, leaving styles as found. */
+	private clearStamp(owner?: number): void {
+		const stamped = this.stamped;
+		if (stamped === null) return;
+		if (owner !== undefined && stamped.generation !== owner) return;
+		this.stamped = null;
+		const { el } = stamped;
+		if (stamped.name === "") {
+			el.style.removeProperty("view-transition-name");
+		} else {
+			el.style.setProperty("view-transition-name", stamped.name);
+		}
+		if (stamped.class === "") {
+			el.style.removeProperty("view-transition-class");
+		} else {
+			el.style.setProperty("view-transition-class", stamped.class);
+		}
 	}
 
 	private onPopState(): void {

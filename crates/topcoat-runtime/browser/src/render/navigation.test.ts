@@ -659,3 +659,286 @@ it("moves the connected render to the destination when both pages are live", asy
 		expect.objectContaining({ run: 2, path: "/chat" }),
 	]);
 });
+
+/** A startViewTransition double recording calls and running the updates. */
+function stubViewTransition(throwOnOptions = false): {
+	calls: unknown[];
+	restore: () => void;
+} {
+	const calls: unknown[] = [];
+	const doc = document as unknown as {
+		startViewTransition: (options: unknown) => unknown;
+	};
+	const original = doc.startViewTransition;
+	doc.startViewTransition = (options: unknown) => {
+		calls.push(options);
+		if (throwOnOptions && typeof options !== "function") {
+			throw new TypeError("not callable");
+		}
+		const update =
+			typeof options === "function"
+				? options
+				: (options as { update: () => void }).update;
+		update();
+		return {
+			updateCallbackDone: Promise.resolve(),
+			finished: Promise.resolve(),
+		};
+	};
+	return {
+		calls,
+		restore: () => {
+			doc.startViewTransition = original;
+		},
+	};
+}
+
+it("swaps inside a typed view transition when the link declares types", async () => {
+	stubFetch(() => snapshot(page("Next", "<p>next page</p>")));
+	const vt = stubViewTransition();
+	mount(
+		`<a data-topcoat-link="intent" data-topcoat-vt-types="game-expand" href="/next">next</a>`,
+	);
+
+	click(link());
+	await settle();
+
+	expect(vt.calls).toHaveLength(1);
+	expect(vt.calls[0]).toEqual({
+		types: ["game-expand"],
+		update: expect.any(Function),
+	});
+	expect(document.body.textContent).toContain("next page");
+	vt.restore();
+});
+
+it("keeps the untyped transition form on engines predating the options form", async () => {
+	stubFetch(() => snapshot(page("Next", "<p>next page</p>")));
+	const vt = stubViewTransition(true);
+	mount(
+		`<a data-topcoat-link="intent" data-topcoat-vt-types="game-expand" href="/next">next</a>`,
+	);
+
+	click(link());
+	await settle();
+
+	expect(vt.calls).toHaveLength(2);
+	expect(typeof vt.calls[1]).toBe("function");
+	expect(document.body.textContent).toContain("next page");
+	vt.restore();
+});
+
+it("navigates without a transition when the link declares no types", async () => {
+	stubFetch(() => snapshot(page("Next", "<p>next page</p>")));
+	const vt = stubViewTransition();
+	mount(`<a data-topcoat-link="intent" href="/next">next</a>`);
+
+	click(link());
+	await settle();
+
+	expect(vt.calls).toHaveLength(0);
+	expect(document.body.textContent).toContain("next page");
+	vt.restore();
+});
+
+it("swaps directly under reduced motion", async () => {
+	stubFetch(() => snapshot(page("Next", "<p>next page</p>")));
+	const vt = stubViewTransition();
+	const reduce = vi
+		.spyOn(window, "matchMedia")
+		.mockReturnValue({ matches: true } as MediaQueryList);
+	mount(
+		`<a data-topcoat-link="intent" data-topcoat-vt-types="game-expand" href="/next">next</a>`,
+	);
+
+	click(link());
+	await settle();
+
+	expect(vt.calls).toHaveLength(0);
+	expect(document.body.textContent).toContain("next page");
+	vt.restore();
+	reduce.mockRestore();
+});
+
+it("announces the committed page so scripts can rebind at a known point", async () => {
+	stubFetch(() => snapshot(page("Next", "<p>next page</p>")));
+	const seen: unknown[] = [];
+	document.addEventListener("topcoat:navigate", (event) => {
+		seen.push((event as CustomEvent).detail);
+	});
+	mount(`<a data-topcoat-link="never" href="/next">next</a>`);
+
+	click(link());
+	await settle();
+
+	expect(seen).toEqual([{ url: "http://localhost:3000/next", mode: "push" }]);
+	// The new page is already in the document when the event fires.
+	expect(document.body.textContent).toContain("next page");
+});
+
+it("announces a back visit with the mode that opened it", async () => {
+	stubFetch(() => snapshot(page("Next", "<p>next page</p>")));
+	const seen: unknown[] = [];
+	document.addEventListener("topcoat:navigate", (event) => {
+		seen.push((event as CustomEvent).detail);
+	});
+	mount(`<a data-topcoat-link="never" href="/next">next</a>`);
+	click(link());
+	await settle();
+	history.replaceState(null, "", "/");
+	window.dispatchEvent(new PopStateEvent("popstate"));
+	await settle();
+
+	expect(seen).toHaveLength(2);
+	expect(seen[1]).toEqual({ url: "http://localhost:3000/", mode: "traverse" });
+});
+
+it("names the clicked element and releases it after the capture", async () => {
+	stubFetch(() => snapshot(page("Next", "<p>next page</p>")));
+	const vt = stubViewTransition();
+	mount(
+		`<a data-topcoat-link="intent" data-topcoat-vt-types="game-expand" data-topcoat-vt-shared="game-42" href="/next"><img src="/shared.jpg" alt=""></a>`,
+	);
+	const shared = link().querySelector("img") as HTMLElement;
+
+	click(link());
+	// The snapshot happens before the response commits, so the name has to
+	// be in place while the click is still being handled.
+	expect(shared.style.getPropertyValue("view-transition-name")).toBe("game-42");
+	expect(shared.style.getPropertyValue("view-transition-class")).toBe(
+		"vt-shared",
+	);
+
+	await settle();
+	// Both pages are named the same from here on if the stamp outlived the
+	// swap: two rendered names make the transition skip itself silently.
+	expect(shared.style.getPropertyValue("view-transition-name")).toBe("");
+	expect(shared.style.getPropertyValue("view-transition-class")).toBe("");
+	expect(vt.calls).toHaveLength(1);
+	vt.restore();
+});
+
+it("restores a server-named element after the stamp is released", async () => {
+	stubFetch(() => snapshot(page("Next", "<p>next page</p>")));
+	const vt = stubViewTransition();
+	mount(
+		`<a data-topcoat-link="intent" data-topcoat-vt-types="game-expand" data-topcoat-vt-shared="game-42" href="/next"><img src="/shared.jpg" alt="" style="view-transition-name: static-name"></a>`,
+	);
+	const shared = link().querySelector("img") as HTMLElement;
+
+	click(link());
+	expect(shared.style.getPropertyValue("view-transition-name")).toBe("game-42");
+
+	await settle();
+	expect(shared.style.getPropertyValue("view-transition-name")).toBe(
+		"static-name",
+	);
+	vt.restore();
+});
+
+it("releases the previous stamp before stamping another", async () => {
+	stubFetch(() => snapshot(page("Next", "<p>next page</p>")));
+	stubViewTransition();
+	mount(
+		`<a data-topcoat-link="intent" data-topcoat-vt-types="game-expand" data-topcoat-vt-shared="game-42" href="/next"><img id="a" src="/a.jpg" alt=""></a><a data-topcoat-link="intent" data-topcoat-vt-types="game-expand" data-topcoat-vt-shared="game-7" href="/other"><img id="b" src="/b.jpg" alt=""></a>`,
+	);
+	const [first, second] = Array.from(
+		document.querySelectorAll("img"),
+	) as HTMLElement[];
+
+	click(link("#a").closest("a") as Element);
+	click(link("#b").closest("a") as Element);
+
+	// Two live names would make the next transition reject and skip.
+	expect(first?.style.getPropertyValue("view-transition-name")).toBe("");
+	expect(second?.style.getPropertyValue("view-transition-name")).toBe("game-7");
+	await settle();
+});
+
+it("keeps a newer click's name when a superseded navigation settles", async () => {
+	// The first click's request must reject on abort for its navigation to
+	// settle, so the stub honours the signal the runtime passes.
+	const bResponse = snapshot(page("B", "<p>b</p>"));
+	let releaseB: () => void = () => {};
+	vi.stubGlobal("fetch", (input: RequestInfo | URL, init: RequestInit) => {
+		const path = new URL(String(input)).pathname;
+		return new Promise<Response>((resolve, reject) => {
+			init.signal?.addEventListener("abort", () =>
+				reject(new DOMException("aborted", "AbortError")),
+			);
+			if (path === "/a") return;
+			releaseB = () => resolve(bResponse);
+		});
+	});
+	const atSnapshot: string[] = [];
+	(document as unknown as Record<string, unknown>).startViewTransition = (
+		options: unknown,
+	) => {
+		const update =
+			typeof options === "function"
+				? options
+				: (options as { update: () => void }).update;
+		atSnapshot.push(second.style.getPropertyValue("view-transition-name"));
+		update();
+		return {
+			updateCallbackDone: Promise.resolve(),
+			finished: Promise.resolve(),
+		};
+	};
+	mount(
+		`<a id="a" data-topcoat-link="intent" data-topcoat-vt-types="expand" data-topcoat-vt-shared="name-a" href="/a">A</a>` +
+			`<a id="b" data-topcoat-link="intent" data-topcoat-vt-types="expand" data-topcoat-vt-shared="name-b" href="/b"><img src="/b.jpg" alt=""></a>`,
+	);
+	const second = link("#b").querySelector("img") as HTMLElement;
+
+	click(link("#a"));
+	click(link("#b"));
+	// The superseded navigation settles here, before B's response arrives.
+	await settle();
+	releaseB();
+	await settle();
+
+	// B is the transition's origin, so its element still has to be named
+	// when the snapshot is taken.
+	expect(atSnapshot).toEqual(["name-b"]);
+});
+
+it("leaves the element unnamed when the link declares no transition types", async () => {
+	stubFetch(() => snapshot(page("Next", "<p>next page</p>")));
+	mount(
+		`<a data-topcoat-link="intent" data-topcoat-vt-shared="game-42" href="/next"><img src="/shared.jpg" alt=""></a>`,
+	);
+	const shared = link().querySelector("img") as HTMLElement;
+
+	click(link());
+	await settle();
+
+	// Nothing pairs with it without a transition, so it must not linger.
+	expect(shared.style.getPropertyValue("view-transition-name")).toBe("");
+});
+
+it("lets a boot-time listener bind to content the new page brings", async () => {
+	stubFetch(() =>
+		snapshot(
+			page("Next", '<div data-shelf-sentinel="1"><button>load</button></div>'),
+		),
+	);
+	mount(`<a data-topcoat-link="intent" href="/next">next</a>`);
+	// The shape a script outside the runtime uses: bind at boot, rebind on
+	// the announcement.
+	const bound: string[] = [];
+	const init = () => {
+		for (const el of document.querySelectorAll("[data-shelf-sentinel]")) {
+			bound.push(el.getAttribute("data-shelf-sentinel") ?? "");
+		}
+	};
+	init();
+	document.addEventListener("topcoat:navigate", init);
+	expect(bound).toEqual([]);
+
+	click(link());
+	await settle();
+
+	// Same tick as the swap, not "whenever the next mutation happens".
+	expect(bound).toEqual(["1"]);
+});
