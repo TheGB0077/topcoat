@@ -1,5 +1,6 @@
 use topcoat::{
     Result,
+    story::story,
     view::{Attributes, Child, Class, StaticClass, View, class, component, view},
 };
 
@@ -18,6 +19,19 @@ pub enum BadgeVariant {
     Outline,
     /// A destructive-filled badge for errors and warnings.
     Destructive,
+}
+
+impl std::str::FromStr for BadgeVariant {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Primary" => Ok(Self::Primary),
+            "Secondary" => Ok(Self::Secondary),
+            "Outline" => Ok(Self::Outline),
+            "Destructive" => Ok(Self::Destructive),
+            _ => Err(()),
+        }
+    }
 }
 
 impl BadgeVariant {
@@ -66,6 +80,7 @@ pub fn badge_variants(variant: BadgeVariant) -> Class<(StaticClass, StaticClass)
 ///     badge(variant: BadgeVariant::Destructive, "Failed")
 /// }
 /// ```
+#[story(group = "Admin/Decor", component = "Badge", name = "Default", params = [select("variant", ["Primary", "Secondary", "Outline", "Destructive"])], fixtures = [variant = BadgeVariant::Primary])]
 #[component]
 pub async fn badge(
     #[default] variant: BadgeVariant,

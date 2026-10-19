@@ -1,5 +1,6 @@
 use topcoat::{
     Result,
+    story::story,
     view::{Attributes, PromotedStr, StaticClass, View, class, component, view},
 };
 
@@ -15,6 +16,17 @@ pub enum SeparatorOrientation {
     Horizontal,
     /// A rule down the full height of its container.
     Vertical,
+}
+
+impl std::str::FromStr for SeparatorOrientation {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Horizontal" => Ok(Self::Horizontal),
+            "Vertical" => Ok(Self::Vertical),
+            _ => Err(()),
+        }
+    }
 }
 
 impl SeparatorOrientation {
@@ -58,6 +70,7 @@ const SEPARATOR: StaticClass = class!("shrink-0 border-0 bg-border");
 ///     </div>
 /// }
 /// ```
+#[story(group = "Admin/Decor", component = "Separator", name = "Default", params = [select("orientation", ["Horizontal", "Vertical"])], fixtures = [orientation = SeparatorOrientation::Horizontal])]
 #[component]
 pub async fn separator(
     /// The direction the rule runs in.

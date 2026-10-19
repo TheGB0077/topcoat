@@ -231,3 +231,36 @@ async fn wrapper_story_renders_children_and_knobs() {
     assert!(html.contains("center"), "{html}");
     assert!(!html.contains(">left<"), "{html}");
 }
+
+/// An inline story with a child fixture. The fixture is a view built
+/// against the dashboard's own render context, so the annotated
+/// component renders markup instead of an empty child.
+#[story(
+    group = "Shop",
+    component = "Panel",
+    name = "ChildFixture",
+    fixtures = [child = Child::new(view! { cx => <p>"inline body"</p> })],
+)]
+#[component]
+async fn panel_inlined(#[default] child: Child<'_>) -> Result<impl View> {
+    Ok(view! { <section>(child)</section> })
+}
+
+#[tokio::test]
+async fn child_fixture_renders_markup() {
+    use topcoat::{context::Cx, view::ViewExt};
+
+    let entry = stories()
+        .iter()
+        .find(|entry| entry.meta.name == "ChildFixture")
+        .expect("the story is registered");
+    let cx = Cx::default();
+    let html = (entry.render)(&cx, String::new())
+        .await
+        .expect("story renders")
+        .single()
+        .await
+        .expect("story polls")
+        .render(&cx);
+    assert!(html.contains("inline body"), "{html}");
+}

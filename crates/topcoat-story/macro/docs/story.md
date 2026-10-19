@@ -44,11 +44,12 @@ value overrides the fixture, an absent or invalid knob falls back to it.
 off. Text, select, and toggle cover `String`, `&str`, `bool`, and the
 number types, and `Option` of any of those (`None` and `Some(..)` both
 work as fixtures). Anything else keeps its fixture: show each value in
-its own story, the way matrix stories already do. Children never take
-fixtures — attributes cannot carry markup, so a component with a
-required child gets a thin wrapper story that renders it with inline
-children. `&str` fixtures must be literals; owned values cannot borrow
-into a lazily returned view.
+its own story, the way matrix stories already do. Children take
+fixtures too: `fixtures = [child = Child::new(view! { cx => ... })]`,
+whose expression may use `cx`, the dashboard's own render context; omit
+both the fixture and `#[default]` on `child`, and the story is rejected.
+`&str` fixtures must be literals; owned values cannot borrow into
+a lazily returned view.
 
 A `global("key", [...])` control behaves like `select` within its own
 story and additionally rides along every dashboard navigation, with one
