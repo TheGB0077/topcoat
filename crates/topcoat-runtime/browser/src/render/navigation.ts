@@ -52,6 +52,13 @@ const SCRIPT_TYPES = new Set([
 	"application/javascript",
 ]);
 
+/** One element the runtime named for a transition, and what to restore. */
+type SharedStamp = {
+	el: HTMLElement;
+	name: string;
+	class: string;
+};
+
 /**
  * Opens pages by updating the current document.
  *
@@ -77,12 +84,10 @@ export class NavigationController {
 	private streaming: Promise<void> | null = null;
 	/** The current page's URL with the # fragment removed. */
 	private documentUrl = "";
-	/** The shared waiting to be named for the current view transition. */
+	/** The elements waiting to be named for the current view transition. */
 	private stamped: {
-		el: HTMLElement;
-		name: string;
-		class: string;
-		/** The navigation that stamped it, so only that one may release it. */
+		stamped: SharedStamp[];
+		/** The navigation that stamped them, so only it may release them. */
 		generation: number;
 	} | null = null;
 	/** Scripts already loaded in this document. */
@@ -453,9 +458,9 @@ export class NavigationController {
 	}
 
 	/**
-	 * Names the shared element inside `link`. Only a link that declares
-	 * transition types gets one: without a transition the name would sit on
-	 * the page until the next click.
+	 * Names the elements `link` marks with `VT_SHARED_ATTRIBUTE`. Only a link
+	 * that declares transition types gets one: without a transition the names
+	 * would sit on the page until the next click.
 	 *
 	 * The previous stamp is released first, because two rendered elements
 	 * sharing a `view-transition-name` makes the transition skip itself. The
@@ -464,37 +469,53 @@ export class NavigationController {
 	 */
 	private stamp(link: HTMLAnchorElement, types: string[] | null): void {
 		this.clearStamp();
-		const name = link.getAttribute(VT_SHARED_ATTRIBUTE);
-		if (types === null || name === null || name === "") return;
-		const shared = link.querySelector("img") ?? link;
-		// Restore what was inline before, so a shared element the server
-		// already names keeps its own name once the transition is done.
-		this.stamped = {
-			el: shared,
-			name: shared.style.getPropertyValue("view-transition-name"),
-			class: shared.style.getPropertyValue("view-transition-class"),
-			generation: this.generation + 1,
-		};
-		shared.style.setProperty("view-transition-name", name);
-		shared.style.setProperty("view-transition-class", VT_SHARED_CLASS);
+		if (types === null) return;
+		const selector = `[${VT_SHARED_ATTRIBUTE}]`;
+		const marked: HTMLElement[] = [
+			...(link.matches(selector) ? [link] : []),
+			...link.querySelectorAll<HTMLElement>(selector),
+		];
+		const stamped: SharedStamp[] = [];
+		const seen = new Set<string>();
+		for (const el of marked) {
+			const name = el.getAttribute(VT_SHARED_ATTRIBUTE);
+			if (name === null || name === "") continue;
+			// A name may be stamped once per transition. A second element
+			// carrying it would make the browser reject the whole
+			// transition, so it keeps the first and leaves the rest out.
+			if (seen.has(name)) continue;
+			seen.add(name);
+			// Keep the inline values to put back, so an element the server
+			// already names keeps its own name once the transition is done.
+			stamped.push({
+				el,
+				name: el.style.getPropertyValue("view-transition-name"),
+				class: el.style.getPropertyValue("view-transition-class"),
+			});
+			el.style.setProperty("view-transition-name", name);
+			el.style.setProperty("view-transition-class", VT_SHARED_CLASS);
+		}
+		if (stamped.length > 0)
+			this.stamped = { stamped, generation: this.generation + 1 };
 	}
 
-	/** Takes back the name this controller stamped, leaving styles as found. */
+	/** Takes back the names this controller stamped, leaving styles as found. */
 	private clearStamp(owner?: number): void {
-		const stamped = this.stamped;
-		if (stamped === null) return;
-		if (owner !== undefined && stamped.generation !== owner) return;
+		const stamp = this.stamped;
+		if (stamp === null) return;
+		if (owner !== undefined && stamp.generation !== owner) return;
 		this.stamped = null;
-		const { el } = stamped;
-		if (stamped.name === "") {
-			el.style.removeProperty("view-transition-name");
-		} else {
-			el.style.setProperty("view-transition-name", stamped.name);
-		}
-		if (stamped.class === "") {
-			el.style.removeProperty("view-transition-class");
-		} else {
-			el.style.setProperty("view-transition-class", stamped.class);
+		for (const { el, name, class: viewClass } of stamp.stamped) {
+			if (name === "") {
+				el.style.removeProperty("view-transition-name");
+			} else {
+				el.style.setProperty("view-transition-name", name);
+			}
+			if (viewClass === "") {
+				el.style.removeProperty("view-transition-class");
+			} else {
+				el.style.setProperty("view-transition-class", viewClass);
+			}
 		}
 	}
 

@@ -9,10 +9,13 @@
 export const VT_TYPES_ATTRIBUTE = "data-topcoat-vt-types";
 
 /**
- * Names the element a link shares with its destination, e.g.
- * `data-topcoat-vt-shared="card-42"`. Clicking the link stamps that name
- * and `VT_SHARED_CLASS` on the element before the transition takes its
- * snapshot. Only meaningful alongside `VT_TYPES_ATTRIBUTE`.
+ * Names an element that shares a transition with a destination, e.g.
+ * `data-topcoat-vt-shared="card-42"`. Put it on the element inside the
+ * link rather than on the link: clicking stamps that name and
+ * `VT_SHARED_CLASS` on the marked element before the transition takes its
+ * snapshot, and releases them once the new page is captured.
+ *
+ * Only meaningful inside a link that declares `VT_TYPES_ATTRIBUTE`.
  */
 export const VT_SHARED_ATTRIBUTE = "data-topcoat-vt-shared";
 

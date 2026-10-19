@@ -797,7 +797,7 @@ it("names the clicked element and releases it after the capture", async () => {
 	stubFetch(() => snapshot(page("Next", "<p>next page</p>")));
 	const vt = stubViewTransition();
 	mount(
-		`<a data-topcoat-link="intent" data-topcoat-vt-types="game-expand" data-topcoat-vt-shared="game-42" href="/next"><img src="/shared.jpg" alt=""></a>`,
+		`<a data-topcoat-link="intent" data-topcoat-vt-types="game-expand" href="/next"><img data-topcoat-vt-shared="game-42" src="/shared.jpg" alt=""></a>`,
 	);
 	const shared = link().querySelector("img") as HTMLElement;
 
@@ -822,7 +822,7 @@ it("restores a server-named element after the stamp is released", async () => {
 	stubFetch(() => snapshot(page("Next", "<p>next page</p>")));
 	const vt = stubViewTransition();
 	mount(
-		`<a data-topcoat-link="intent" data-topcoat-vt-types="game-expand" data-topcoat-vt-shared="game-42" href="/next"><img src="/shared.jpg" alt="" style="view-transition-name: static-name"></a>`,
+		`<a data-topcoat-link="intent" data-topcoat-vt-types="game-expand" href="/next"><img data-topcoat-vt-shared="game-42" src="/shared.jpg" alt="" style="view-transition-name: static-name"></a>`,
 	);
 	const shared = link().querySelector("img") as HTMLElement;
 
@@ -840,7 +840,7 @@ it("releases the previous stamp before stamping another", async () => {
 	stubFetch(() => snapshot(page("Next", "<p>next page</p>")));
 	stubViewTransition();
 	mount(
-		`<a data-topcoat-link="intent" data-topcoat-vt-types="game-expand" data-topcoat-vt-shared="game-42" href="/next"><img id="a" src="/a.jpg" alt=""></a><a data-topcoat-link="intent" data-topcoat-vt-types="game-expand" data-topcoat-vt-shared="game-7" href="/other"><img id="b" src="/b.jpg" alt=""></a>`,
+		`<a data-topcoat-link="intent" data-topcoat-vt-types="game-expand" href="/next"><img id="a" data-topcoat-vt-shared="game-42" src="/a.jpg" alt=""></a><a data-topcoat-link="intent" data-topcoat-vt-types="game-expand" href="/other"><img id="b" data-topcoat-vt-shared="game-7" src="/b.jpg" alt=""></a>`,
 	);
 	const [first, second] = Array.from(
 		document.querySelectorAll("img"),
@@ -887,7 +887,7 @@ it("keeps a newer click's name when a superseded navigation settles", async () =
 	};
 	mount(
 		`<a id="a" data-topcoat-link="intent" data-topcoat-vt-types="expand" data-topcoat-vt-shared="name-a" href="/a">A</a>` +
-			`<a id="b" data-topcoat-link="intent" data-topcoat-vt-types="expand" data-topcoat-vt-shared="name-b" href="/b"><img src="/b.jpg" alt=""></a>`,
+			`<a id="b" data-topcoat-link="intent" data-topcoat-vt-types="expand" href="/b"><img data-topcoat-vt-shared="name-b" src="/b.jpg" alt=""></a>`,
 	);
 	const second = link("#b").querySelector("img") as HTMLElement;
 
@@ -901,6 +901,64 @@ it("keeps a newer click's name when a superseded navigation settles", async () =
 	// B is the transition's origin, so its element still has to be named
 	// when the snapshot is taken.
 	expect(atSnapshot).toEqual(["name-b"]);
+});
+
+it("keeps a duplicate name off the page rather than stamping it twice", async () => {
+	stubFetch(() => snapshot(page("Next", "<p>next page</p>")));
+	mount(
+		`<a data-topcoat-link="intent" data-topcoat-vt-types="expand" href="/next"><img id="a" data-topcoat-vt-shared="same" src="/a.jpg" alt=""><span id="b" data-topcoat-vt-shared="same"></span></a>`,
+	);
+	const first = document.getElementById("a") as HTMLElement;
+	const second = document.getElementById("b") as HTMLElement;
+
+	click(link());
+
+	// Two rendered elements sharing a name make the browser reject the
+	// transition outright, so only the first keeps it and the second would
+	// otherwise take the whole animation down with it.
+	expect(first.style.getPropertyValue("view-transition-name")).toBe("same");
+	expect(second.style.getPropertyValue("view-transition-name")).toBe("");
+});
+
+it("names every element the link marks, not only the first", async () => {
+	stubFetch(() => snapshot(page("Next", "<p>next page</p>")));
+	mount(
+		`<a data-topcoat-link="intent" data-topcoat-vt-types="expand" href="/next"><img id="a" data-topcoat-vt-shared="one" src="/a.jpg" alt=""><span id="b" data-topcoat-vt-shared="two"></span></a>`,
+	);
+	const first = document.getElementById("a") as HTMLElement;
+	const second = document.getElementById("b") as HTMLElement;
+
+	click(link());
+	// A link can morph more than one element without the runtime guessing
+	// which: each marked element carries its own name.
+	expect(first.style.getPropertyValue("view-transition-name")).toBe("one");
+	expect(second.style.getPropertyValue("view-transition-name")).toBe("two");
+	expect(first.style.getPropertyValue("view-transition-class")).toBe(
+		"vt-shared",
+	);
+	expect(second.style.getPropertyValue("view-transition-class")).toBe(
+		"vt-shared",
+	);
+
+	await settle();
+	expect(first.style.getPropertyValue("view-transition-name")).toBe("");
+	expect(second.style.getPropertyValue("view-transition-name")).toBe("");
+});
+
+it("names a non-image element when that is what the link marks", async () => {
+	stubFetch(() => snapshot(page("Next", "<p>next page</p>")));
+	mount(
+		`<a data-topcoat-link="intent" data-topcoat-vt-types="expand" href="/next"><img src="/ignored.jpg" alt=""><span id="card" data-topcoat-vt-shared="card-1"></span></a>`,
+	);
+	const image = link().querySelector("img") as HTMLElement;
+	const card = document.getElementById("card") as HTMLElement;
+
+	click(link());
+	expect(card.style.getPropertyValue("view-transition-name")).toBe("card-1");
+	// Only marked elements are named, so an unmarked sibling image stays
+	// out of the transition.
+	expect(image.style.getPropertyValue("view-transition-name")).toBe("");
+	await settle();
 });
 
 it("leaves the element unnamed when the link declares no transition types", async () => {

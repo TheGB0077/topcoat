@@ -170,7 +170,7 @@ Transitions need browser support. The runtime skips them where the API is missin
 
 # Shared Elements
 
-By default the whole page cross-fades. To morph one element into another instead, name it on both sides with [`view-transition-name`][vt-name]. Give the link a `vt_shared`:
+By default the whole page cross-fades. To morph an element into its counterpart on the destination, mark the element with [`VT_SHARED_ATTRIBUTE`] and give the destination's element the same [`view-transition-name`][vt-name] in its style:
 
 ```rust
 # use topcoat::{router::href, runtime::link, view::view};
@@ -183,12 +183,19 @@ Ok(view! {
     link(
         href: href!(products),
         vt: "detail",
-        vt_shared: format!("product-{id}"),
-        <img src="/products/shoes.jpg" alt="Shoes" />
+        <img
+            data-topcoat-vt-shared=(format!("product-{id}"))
+            src="/products/shoes.jpg"
+            alt="Shoes"
+        />
     )
 })
 # }
 ```
+
+The marker names the element; the runtime stamps that name on it when the link is followed, and releases it once the new page is captured, so you never write that timing or clean it up. Marking an element is inert on its own, and the marker may name any element, not only an image.
+
+A link may mark more than one element, to morph several at once. Each needs its **own** name: a `view-transition-name` must be unique among the elements rendered when the transition starts, so marking two elements with the same name makes the browser skip the animation. Pair each origin with one destination, and give every pair its own name.
 
 The destination's matching element carries the same name in its style:
 
@@ -208,13 +215,11 @@ Ok(view! {
 # }
 ```
 
-The runtime applies the name to the link's first `<img>`, or to the anchor when it has no image. It holds the name only while the transition runs, so you never write that logic or clean it up.
-
-A name must be unique among the elements rendered when the transition starts, because two elements sharing one makes the browser skip the animation. Derive the name from whatever identifies the item, so a page that shows the same item more than once does not repeat it.
+A name must be unique among the elements rendered when the transition starts, because two elements sharing one makes the browser skip the animation. Derive it from whatever identifies the item and the element, so a page showing the same item twice does not repeat it.
 
 [view-transition-name]: https://developer.mozilla.org/docs/Web/CSS/view-transition-name
 
-For your own `<a>` markup, use [`VT_ATTRIBUTE`] and [`VT_SHARED_ATTRIBUTE`] with `attrs`.
+For your own `<a>` markup, use [`VT_ATTRIBUTE`] with `attrs`.
 
 # Navigation Behavior
 
