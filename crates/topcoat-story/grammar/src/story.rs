@@ -353,6 +353,7 @@ enum WireType {
     Str,
     String,
     Bool,
+    Enum(Ident),
     Int(Ident),
     Float(Ident),
     Opt(Box<WireType>),
@@ -387,7 +388,7 @@ fn wire_type(ty: &syn::Type) -> WireType {
                 "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
                 | "u128" | "usize" => WireType::Int(segment.ident.clone()),
                 "f32" | "f64" => WireType::Float(segment.ident.clone()),
-                _ => WireType::Skip,
+                _ => WireType::Enum(segment.ident.clone()),
             }
         }
         syn::Type::Reference(reference) if reference.mutability.is_none() => {
@@ -451,17 +452,6 @@ fn plan_props(attr: &StoryAttr, item: &StoryItem) -> syn::Result<Vec<PropPlan>> 
         if prop.ident == "cx" {
             continue;
         }
-        if prop.ident == "child"
-            && !typed
-                .attrs
-                .iter()
-                .any(|attr| attr.path().is_ident("default"))
-        {
-            return Err(syn::Error::new_spanned(
-                &prop.ident,
-                "pass children from a wrapper story function; attributes cannot carry markup",
-            ));
-        }
         let control = attr
             .params
             .iter()
@@ -475,6 +465,12 @@ fn plan_props(attr: &StoryAttr, item: &StoryItem) -> syn::Result<Vec<PropPlan>> 
             .attrs
             .iter()
             .any(|attr| attr.path().is_ident("default"));
+        if prop.ident == "child" && fixture.is_none() && !defaulted {
+            return Err(syn::Error::new_spanned(
+                &prop.ident,
+                "give `child` a fixture (its expression may use `cx`, the dashboard's own render context), or mark the prop `#[default]`",
+            ));
+        }
         let wire = wire_type(&typed.ty);
 
         if let Some(kind) = &control {
@@ -587,7 +583,11 @@ impl ToTokens for Story {
                         )
                     });
                 }
-                (WireType::Int(ty) | WireType::Float(ty), Some(_), Some(fixture)) => {
+                (
+                    WireType::Int(ty) | WireType::Float(ty) | WireType::Enum(ty),
+                    Some(_),
+                    Some(fixture),
+                ) => {
                     setters.push(quote! {
                         .#prop(
                             #topcoat_story::pair(pairs, #key)
@@ -615,7 +615,7 @@ impl ToTokens for Story {
                                 })
                                 .or(#fixture)
                         },
-                        WireType::Int(ty) | WireType::Float(ty) => quote! {
+                        WireType::Int(ty) | WireType::Float(ty) | WireType::Enum(ty) => quote! {
                             #topcoat_story::pair(pairs, #key)
                                 .and_then(|value| value.parse::<#ty>().ok())
                                 .or(#fixture)
