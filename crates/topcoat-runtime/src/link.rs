@@ -17,11 +17,12 @@ const LINK_ATTRIBUTE: &str = "data-topcoat-link";
 /// your own `<a>` markup instead of calling [`link`].
 pub const VT_ATTRIBUTE: &str = "data-topcoat-vt-types";
 
-/// Names the shared element a link pairs with its destination.
+/// Marks an element that shares a View Transition with the destination.
 ///
-/// The value is a [`view-transition-name`][name]. Prefer the `vt_shared`
-/// argument on [`link`]. Use this constant when writing your own `<a>`
-/// markup instead of calling [`link`].
+/// The value is the [`view-transition-name`][name] the runtime stamps on
+/// the element when the link is followed, and releases once the new page is
+/// captured. Put it on the element inside a [`link`] that declares
+/// `vt`, not on the link itself.
 ///
 /// [name]: https://developer.mozilla.org/docs/Web/CSS/view-transition-name
 pub const VT_SHARED_ATTRIBUTE: &str = "data-topcoat-vt-shared";
@@ -108,21 +109,12 @@ pub async fn link<H>(
     prefetch: Option<PrefetchMode>,
     /// Space-separated View Transition types the navigation runs inside.
     /// Omitted by default: the navigation swaps without a transition.
+    ///
+    /// To morph an element into its counterpart on the destination, mark it
+    /// with [`VT_SHARED_ATTRIBUTE`] inside the link.
     #[into]
     #[default]
     vt: Option<&str>,
-    /// The [`view-transition-name`][name] this link shares with its
-    /// destination, so the pair morphs instead of the page cross-fading.
-    /// Requires `vt`.
-    ///
-    /// A shared name must be unique among the elements rendered when the
-    /// transition starts, so derive it from whatever identifies the item
-    /// rather than passing a constant.
-    ///
-    /// [name]: https://developer.mozilla.org/docs/Web/CSS/view-transition-name
-    #[into]
-    #[default]
-    vt_shared: Option<String>,
     /// Additional HTML attributes to put on the link.
     #[default]
     mut attrs: Attributes,
@@ -135,14 +127,8 @@ where
 {
     let prefetch = prefetch.unwrap_or_else(|| prefetch_mode(cx));
     attrs.extend(link_attrs(cx, href, prefetch));
-    // `vt_shared` only means something alongside `vt`: without a transition
-    // there is no snapshot to pair with, and the name would just sit on the
-    // page until the next click.
     if let Some(vt) = vt {
         attrs.insert(cx, VT_ATTRIBUTE, vt);
-        if let Some(shared) = vt_shared {
-            attrs.insert(cx, VT_SHARED_ATTRIBUTE, shared);
-        }
     }
     Ok(view! { <a (attrs)>(child)</a> })
 }
@@ -274,30 +260,39 @@ mod tests {
     }
 
     #[test]
-    fn a_cover_needs_its_transition_types_to_mean_anything() {
+    fn link_carries_no_shared_name_of_its_own() {
         let cx = &Cx::default();
-        // Naming a shared element without a transition would leave a
-        // `view-transition-name` in the markup that nothing pairs with.
+        // The shared name belongs on the element that carries it, not on the
+        // anchor, so `link` never emits the attribute itself.
         let html = render(view! {
             cx =>
-            link(href: "/articles/7", vt_shared: "article-7".to_owned(), "Read more")
-        });
-
-        assert!(!html.contains("view-transition"), "{html}");
-    }
-
-    #[test]
-    fn a_cover_is_named_for_the_transition_that_carries_it() {
-        let cx = &Cx::default();
-        let html = render(view! {
-            cx =>
-            link(href: "/articles/7", vt: "detail", vt_shared: "article-7".to_owned(), "Read more")
+            link(href: "/articles/7", vt: "detail", "Read more")
         });
 
         assert!(html.contains(r#"data-topcoat-vt-types="detail""#), "{html}");
+        assert!(!html.contains(VT_SHARED_ATTRIBUTE), "{html}");
+    }
+
+    #[test]
+    fn the_shared_marker_is_usable_from_an_application() {
+        let cx = &Cx::default();
+        // What an application writes on the element inside the link.
+        let attrs = attributes! { cx => data-topcoat-vt-shared=("article-7") };
+        let html = render(view! { cx =>
+            link(
+                href: "/articles/7",
+                vt: "detail",
+                <img (attrs) src="/shoes.jpg" alt="Shoes" />
+            )
+        });
+
         assert!(
             html.contains(r#"data-topcoat-vt-shared="article-7""#),
             "{html}"
+        );
+        assert!(
+            VT_SHARED_ATTRIBUTE.starts_with("data-topcoat-"),
+            "{VT_SHARED_ATTRIBUTE}"
         );
     }
 
