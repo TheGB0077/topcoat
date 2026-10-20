@@ -29,6 +29,9 @@ pub mod core;
 #[cfg(feature = "datastar")]
 pub mod datastar;
 
+#[cfg(feature = "story")]
+pub mod story;
+
 #[cfg(feature = "font")]
 pub mod font;
 

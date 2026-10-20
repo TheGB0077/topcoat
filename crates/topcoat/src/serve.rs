@@ -59,11 +59,28 @@ pub async fn serve_until(
 /// Uses [`serve`] for graceful shutdown on process signals. To choose a
 /// different shutdown signal, bind a listener and call [`serve_until`].
 ///
+/// A build made with the `design-story` feature serves the story dashboard
+/// instead of the router it is given, the way `topcoat story run` runs an
+/// application.
+///
 /// # Errors
 ///
 /// Returns `Err` if `HOST`/`PORT` are invalid, if binding the TCP listener
 /// fails, or if serving the router fails (see [`serve`]).
 pub async fn start(service: impl Into<RouterService>) -> Result<(), io::Error> {
+    #[cfg(feature = "design-story")]
+    {
+        let _ = service;
+        return crate::story::start_dashboard().await;
+    }
+    #[cfg(not(feature = "design-story"))]
+    {
+        start_service(service).await
+    }
+}
+
+/// Binds `HOST` and `PORT` and serves `service` on them.
+pub(crate) async fn start_service(service: impl Into<RouterService>) -> Result<(), io::Error> {
     let host = host_from_env()?;
     let port = port_from_env()?;
     let listener = TcpListener::bind((host.as_str(), port)).await?;

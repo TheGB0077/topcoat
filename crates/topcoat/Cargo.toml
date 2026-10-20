@@ -48,6 +48,7 @@ full = [
 	"session",
 	"sitemap",
 	"sse",
+	"story",
 	"tailwind",
 	"tower",
 	"ui",
@@ -77,6 +78,20 @@ cookie = [
 datastar = [
 	"dep:topcoat-datastar",
 	"sse",
+]
+story = [
+	"dep:topcoat-story",
+	"dep:topcoat-story-macro",
+]
+design-story = [
+	"story",
+	"topcoat-story/router",
+	"topcoat-story-macro/collect",
+	"router",
+	"view",
+	"serve",
+	"runtime",
+	"asset",
 ]
 discover = [
 	"dep:inventory",
@@ -186,6 +201,8 @@ topcoat-cookie = { workspace = true, optional = true }
 topcoat-core.workspace = true
 topcoat-core-macro.workspace = true
 topcoat-datastar = { workspace = true, optional = true }
+topcoat-story = { workspace = true, optional = true }
+topcoat-story-macro = { workspace = true, optional = true }
 topcoat-font = { workspace = true, optional = true }
 topcoat-font-macro = { workspace = true, optional = true }
 topcoat-htmx = { workspace = true, optional = true }

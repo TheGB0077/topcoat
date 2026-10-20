@@ -5,6 +5,7 @@ mod common;
 mod dev;
 mod fmt;
 mod new;
+mod story;
 mod ui;
 
 use clap::{Parser, Subcommand};
@@ -23,6 +24,7 @@ impl TopcoatCli {
             Command::Ui(cmd) => cmd.run(),
             Command::Fmt(cmd) => cmd.run().await,
             Command::Dev(cmd) => cmd.run().await,
+            Command::Story(cmd) => cmd.run().await,
             Command::Asset(cmd) => cmd.run().await,
         }
     }
@@ -34,6 +36,8 @@ enum Command {
     New(new::NewCommand),
     /// Start a development server
     Dev(dev::DevCommand),
+    /// Serve the story dashboard
+    Story(story::StoryCommand),
     /// Format Topcoat macro bodies
     Fmt(fmt::FmtCommand),
     /// Inspect assets embedded in the binary
