@@ -9,18 +9,21 @@
 export const VT_TYPES_ATTRIBUTE = "data-topcoat-vt-types";
 
 /**
- * Names an element that shares a transition with a destination, e.g.
- * `data-topcoat-vt-shared="card-42"`. Put it on the element inside the
- * link rather than on the link: clicking stamps that name and
- * `VT_SHARED_CLASS` on the marked element before the transition takes its
- * snapshot, and releases them once the new page is captured.
+ * Marks the element that morphs into its counterpart on the destination,
+ * e.g. `data-topcoat-vt-shared="card-42"`. The value becomes the element's
+ * `view-transition-name` when the link is followed, pairing it with the
+ * destination element that declares the same name in its style.
+ *
+ * Clicking the link applies the name and `VT_SHARED_CLASS` before the
+ * browser captures the current page. After the swap, the destination's
+ * markup determines the styles the element keeps.
  *
  * Only meaningful inside a link that declares `VT_TYPES_ATTRIBUTE`.
  */
 export const VT_SHARED_ATTRIBUTE = "data-topcoat-vt-shared";
 
 /**
- * The `view-transition-class` every stamped element carries, letting a
+ * The `view-transition-class` every marked element carries, letting a
  * stylesheet target just that group with `::view-transition-group(.vt-shared)`
  * instead of `(*)`, which would also match the root snapshot. Engines that
  * predate `view-transition-class` ignore it.
@@ -68,5 +71,16 @@ export async function startTypedTransition(
 			return document.startViewTransition(update);
 		}
 	})();
-	await transition.updateCallbackDone;
+	// `updateCallbackDone` only reports that the update callback returned;
+	// the browser captures the new page afterwards, before `ready` settles.
+	// Waiting for `ready` keeps later frames from landing in the captured
+	// snapshot. A skipped transition (a duplicate `view-transition-name`,
+	// for example) rejects `ready` even though the change applied, so its
+	// rejection must not surface as an unhandled one.
+	const captured = transition.ready.catch(() => {});
+	// A skipped transition rejects `finished` as well. Nothing here waits for
+	// the animation to end, but marking the rejection handled keeps a skip
+	// from surfacing as an unhandled one.
+	transition.finished.catch(() => {});
+	await Promise.all([transition.updateCallbackDone, captured]);
 }

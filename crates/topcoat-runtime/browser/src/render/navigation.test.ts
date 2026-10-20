@@ -661,7 +661,10 @@ it("moves the connected render to the destination when both pages are live", asy
 });
 
 /** A startViewTransition double recording calls and running the updates. */
-function stubViewTransition(throwOnOptions = false): {
+function stubViewTransition(
+	throwOnOptions = false,
+	ready: Promise<void> = Promise.resolve(),
+): {
 	calls: unknown[];
 	restore: () => void;
 } {
@@ -682,6 +685,7 @@ function stubViewTransition(throwOnOptions = false): {
 		update();
 		return {
 			updateCallbackDone: Promise.resolve(),
+			ready,
 			finished: Promise.resolve(),
 		};
 	};
@@ -810,7 +814,7 @@ it("names the clicked element and releases it after the capture", async () => {
 	);
 
 	await settle();
-	// Both pages are named the same from here on if the stamp outlived the
+	// Both pages are named the same from here on if the mark outlived the
 	// swap: two rendered names make the transition skip itself silently.
 	expect(shared.style.getPropertyValue("view-transition-name")).toBe("");
 	expect(shared.style.getPropertyValue("view-transition-class")).toBe("");
@@ -818,7 +822,7 @@ it("names the clicked element and releases it after the capture", async () => {
 	vt.restore();
 });
 
-it("restores a server-named element after the stamp is released", async () => {
+it("restores a server-named element after the mark is released", async () => {
 	stubFetch(() => snapshot(page("Next", "<p>next page</p>")));
 	const vt = stubViewTransition();
 	mount(
@@ -836,7 +840,102 @@ it("restores a server-named element after the stamp is released", async () => {
 	vt.restore();
 });
 
-it("releases the previous stamp before stamping another", async () => {
+it("keeps the destination's transition styles on a reused element", async () => {
+	stubFetch(() =>
+		snapshot(
+			page(
+				"Next",
+				`<a data-topcoat-link="intent" data-topcoat-vt-types="expand" href="/next"><img id="hero" src="/hero.jpg" alt="" style="view-transition-name: page-hero; view-transition-class: page-class"><img id="plain" src="/plain.jpg" alt=""></a>`,
+			),
+		),
+	);
+	const vt = stubViewTransition();
+	mount(
+		`<a data-topcoat-link="intent" data-topcoat-vt-types="expand" href="/next"><img id="hero" data-topcoat-vt-shared="hero" src="/hero.jpg" alt=""><img id="plain" data-topcoat-vt-shared="plain" src="/plain.jpg" alt=""></a>`,
+	);
+	const hero = document.getElementById("hero") as HTMLElement;
+	const plain = document.getElementById("plain") as HTMLElement;
+
+	click(link());
+	expect(hero.style.getPropertyValue("view-transition-name")).toBe("hero");
+
+	// The swap reuses both elements by id. The destination owns the first
+	// one's inline values, so releasing the mark must not restore the
+	// origin's; the second one has no values of its own, so its mark goes.
+	await settle();
+	expect(hero.style.getPropertyValue("view-transition-name")).toBe("page-hero");
+	expect(hero.style.getPropertyValue("view-transition-class")).toBe(
+		"page-class",
+	);
+	expect(plain.style.getPropertyValue("view-transition-name")).toBe("");
+	expect(plain.style.getPropertyValue("view-transition-class")).toBe("");
+	vt.restore();
+});
+
+it("keeps the destination's name when it matches the mark", async () => {
+	// The documented shape: the destination names its element in the style
+	// with the same name the origin's marker applies.
+	stubFetch(() =>
+		snapshot(
+			page(
+				"Next",
+				`<a data-topcoat-link="intent" data-topcoat-vt-types="expand" href="/next"><img id="hero" src="/hero.jpg" alt="" style="view-transition-name: hero"></a>`,
+			),
+		),
+	);
+	const vt = stubViewTransition();
+	mount(
+		`<a data-topcoat-link="intent" data-topcoat-vt-types="expand" href="/next"><img id="hero" data-topcoat-vt-shared="hero" src="/hero.jpg" alt=""></a>`,
+	);
+	const hero = document.getElementById("hero") as HTMLElement;
+
+	click(link());
+	await settle();
+
+	// The matching value must not make the release mistake the destination's
+	// name for its own mark and take it away.
+	expect(hero.style.getPropertyValue("view-transition-name")).toBe("hero");
+	vt.restore();
+});
+
+it("holds streamed frames until the transition captured the new page", async () => {
+	const stream = streamed();
+	stubFetch(() => stream.response);
+	let capture!: () => void;
+	const ready = new Promise<void>((resolve) => {
+		capture = resolve;
+	});
+	const vt = stubViewTransition(false, ready);
+	mount(
+		`<a data-topcoat-link="never" data-topcoat-vt-types="expand" href="/next">next</a>`,
+	);
+
+	click(link());
+	stream.push({
+		t: "snapshot",
+		html: page(
+			"Next",
+			"<!--::topcoat::region::start(1f)--><p>loading</p><!--::topcoat::region::end(1f)-->",
+		),
+	});
+	stream.push({ t: "swap", region: "1f", html: "<p>loaded</p>" });
+	await settle();
+
+	// The update callback has run, but the browser has not captured the new
+	// page yet, so the buffered swap must wait: applying it now would put it
+	// in the transition's "after" snapshot instead of animating in later.
+	expect(document.body.textContent).toContain("loading");
+	expect(document.body.textContent).not.toContain("loaded");
+
+	capture();
+	stream.close();
+	await settle();
+
+	expect(document.body.textContent).toContain("loaded");
+	vt.restore();
+});
+
+it("releases the previous names before marking another", async () => {
 	stubFetch(() => snapshot(page("Next", "<p>next page</p>")));
 	stubViewTransition();
 	mount(
@@ -882,6 +981,7 @@ it("keeps a newer click's name when a superseded navigation settles", async () =
 		update();
 		return {
 			updateCallbackDone: Promise.resolve(),
+			ready: Promise.resolve(),
 			finished: Promise.resolve(),
 		};
 	};
@@ -903,7 +1003,7 @@ it("keeps a newer click's name when a superseded navigation settles", async () =
 	expect(atSnapshot).toEqual(["name-b"]);
 });
 
-it("keeps a duplicate name off the page rather than stamping it twice", async () => {
+it("keeps a duplicate name off the page rather than marking it twice", async () => {
 	stubFetch(() => snapshot(page("Next", "<p>next page</p>")));
 	mount(
 		`<a data-topcoat-link="intent" data-topcoat-vt-types="expand" href="/next"><img id="a" data-topcoat-vt-shared="same" src="/a.jpg" alt=""><span id="b" data-topcoat-vt-shared="same"></span></a>`,

@@ -17,12 +17,12 @@ const LINK_ATTRIBUTE: &str = "data-topcoat-link";
 /// your own `<a>` markup instead of calling [`link`].
 pub const VT_ATTRIBUTE: &str = "data-topcoat-vt-types";
 
-/// Marks an element that shares a View Transition with the destination.
+/// Marks the element that morphs into its counterpart on the destination.
 ///
-/// The value is the [`view-transition-name`][name] the runtime stamps on
-/// the element when the link is followed, and releases once the new page is
-/// captured. Put it on the element inside a [`link`] that declares
-/// `vt`, not on the link itself.
+/// The value becomes the element's [`view-transition-name`][name] when the
+/// link is followed, pairing it with the destination element that declares
+/// the same name in its style. After the swap, the destination's markup
+/// determines the styles the element keeps.
 ///
 /// [name]: https://developer.mozilla.org/docs/Web/CSS/view-transition-name
 pub const VT_SHARED_ATTRIBUTE: &str = "data-topcoat-vt-shared";
@@ -111,7 +111,7 @@ pub async fn link<H>(
     /// Omitted by default: the navigation swaps without a transition.
     ///
     /// To morph an element into its counterpart on the destination, mark it
-    /// with [`VT_SHARED_ATTRIBUTE`] inside the link.
+    /// with [`VT_SHARED_ATTRIBUTE`].
     #[into]
     #[default]
     vt: Option<&str>,
