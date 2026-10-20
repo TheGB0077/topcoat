@@ -351,14 +351,32 @@ export class NavigationController {
 			// A response without a snapshot leaves nothing to show, so the
 			// browser loads the destination instead.
 			if (!committed && isCurrent()) load(destination, mode);
+			// A streamed response keeps swapping regions in after the
+			// snapshot commit; announcing there hands listeners a document
+			// whose suspense regions have not arrived yet. The event fires
+			// once the stream is fully consumed.
+			if (committed && isCurrent()) this.announce(destination, mode);
 		} catch (error) {
 			if (!isCurrent()) return;
 			if (!committed) {
 				load(destination, mode);
 				return;
 			}
+			// The stream failed after the snapshot: regions past the
+			// failure point are missing. The event fires for every
+			// committed document, including this partial one.
+			this.announce(destination, mode);
 			this.runtime.reportError(error);
 		}
+	}
+
+	/** Dispatches NAVIGATE_EVENT for a committed document. */
+	private announce(url: URL, mode: HistoryMode): void {
+		document.dispatchEvent(
+			new CustomEvent<NavigateDetail>(NAVIGATE_EVENT, {
+				detail: { url: url.href, mode },
+			}),
+		);
 	}
 
 	/**
@@ -418,13 +436,6 @@ export class NavigationController {
 			window.scrollTo(0, 0);
 		}
 		resetFocus(target);
-		// Listeners rebind against a settled document: by here the new page is
-		// in place and the URL, scroll position, and focus are already set.
-		document.dispatchEvent(
-			new CustomEvent<NavigateDetail>(NAVIGATE_EVENT, {
-				detail: { url: url.href, mode },
-			}),
-		);
 	}
 
 	private onClick(event: MouseEvent): void {
