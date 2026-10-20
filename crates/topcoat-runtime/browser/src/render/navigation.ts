@@ -52,11 +52,15 @@ const SCRIPT_TYPES = new Set([
 	"application/javascript",
 ]);
 
-/** One element the runtime named for a transition, and what to restore. */
-type SharedStamp = {
+/** One shared-element name the runtime marked, and what to restore. */
+type MarkedVTName = {
 	el: HTMLElement;
-	name: string;
-	class: string;
+	/** The style attribute the mark wrote, to tell it from the destination's. */
+	styleAttribute: string | null;
+	/** The inline name the element had before it was marked. */
+	inlineName: string;
+	/** The inline class the element had before it was marked. */
+	inlineClass: string;
 };
 
 /**
@@ -84,10 +88,10 @@ export class NavigationController {
 	private streaming: Promise<void> | null = null;
 	/** The current page's URL with the # fragment removed. */
 	private documentUrl = "";
-	/** The elements waiting to be named for the current view transition. */
-	private stamped: {
-		stamped: SharedStamp[];
-		/** The navigation that stamped them, so only it may release them. */
+	/** The shared-element names the current navigation marked. */
+	private markedVTNames: {
+		names: MarkedVTName[];
+		/** The navigation that marked them, so only it may release them. */
 		generation: number;
 	} | null = null;
 	/** Scripts already loaded in this document. */
@@ -252,8 +256,8 @@ export class NavigationController {
 			if (this.uncommitted === request) this.uncommitted = null;
 			if (this.streaming === streaming) this.streaming = null;
 			// The previous navigation settles after this one replaced it, so it
-			// releases only the stamp it owns.
-			this.clearStamp(generation);
+			// releases only the names it marked.
+			this.clearVTNames(generation);
 			finish();
 		}
 	}
@@ -327,7 +331,7 @@ export class NavigationController {
 						// has done its job. Holding it would leave the two
 						// shared elements colliding for the animation's
 						// duration.
-						this.clearStamp(generation);
+						this.clearVTNames(generation);
 						break;
 					}
 					case "swap":
@@ -456,9 +460,9 @@ export class NavigationController {
 		event.preventDefault();
 		const vtTypes = vtTypesOf(link);
 		// Name the shared element before anything is fetched: the origin is what the
-		// transition snapshots, so the stamp has to be in place by the time
+		// transition snapshots, so the mark has to be in place by the time
 		// the response commits, and only a click can say which one.
-		this.stamp(link, vtTypes);
+		this.markVTNames(link, vtTypes);
 		// Reuse the history entry when opening the current URL again.
 		void this.navigate(
 			url,
@@ -473,59 +477,76 @@ export class NavigationController {
 	 * that declares transition types gets one: without a transition the names
 	 * would sit on the page until the next click.
 	 *
-	 * The previous stamp is released first, because two rendered elements
+	 * The previous names are released first, because two rendered elements
 	 * sharing a `view-transition-name` makes the transition skip itself. The
-	 * stamp records the generation of the navigation about to open, so a
+	 * mark records the generation of the navigation about to open, so a
 	 * superseded navigation settling later cannot release a newer one.
 	 */
-	private stamp(link: HTMLAnchorElement, types: string[] | null): void {
-		this.clearStamp();
+	private markVTNames(link: HTMLAnchorElement, types: string[] | null): void {
+		this.clearVTNames();
 		if (types === null) return;
 		const selector = `[${VT_SHARED_ATTRIBUTE}]`;
 		const marked: HTMLElement[] = [
 			...(link.matches(selector) ? [link] : []),
 			...link.querySelectorAll<HTMLElement>(selector),
 		];
-		const stamped: SharedStamp[] = [];
+		const names: MarkedVTName[] = [];
 		const seen = new Set<string>();
 		for (const el of marked) {
 			const name = el.getAttribute(VT_SHARED_ATTRIBUTE);
 			if (name === null || name === "") continue;
-			// A name may be stamped once per transition. A second element
+			// A name may be marked once per transition. A second element
 			// carrying it would make the browser reject the whole
 			// transition, so it keeps the first and leaves the rest out.
 			if (seen.has(name)) continue;
 			seen.add(name);
 			// Keep the inline values to put back, so an element the server
 			// already names keeps its own name once the transition is done.
-			stamped.push({
-				el,
-				name: el.style.getPropertyValue("view-transition-name"),
-				class: el.style.getPropertyValue("view-transition-class"),
-			});
+			const inlineName = el.style.getPropertyValue("view-transition-name");
+			const inlineClass = el.style.getPropertyValue("view-transition-class");
 			el.style.setProperty("view-transition-name", name);
 			el.style.setProperty("view-transition-class", VT_SHARED_CLASS);
+			// Record the attribute the mark wrote: a swap replaces it with
+			// the destination's own, even when that names the element the
+			// same way.
+			names.push({
+				el,
+				styleAttribute: el.getAttribute("style"),
+				inlineName,
+				inlineClass,
+			});
 		}
-		if (stamped.length > 0)
-			this.stamped = { stamped, generation: this.generation + 1 };
+		if (names.length > 0)
+			this.markedVTNames = { names, generation: this.generation + 1 };
 	}
 
-	/** Takes back the names this controller stamped, leaving styles as found. */
-	private clearStamp(owner?: number): void {
-		const stamp = this.stamped;
-		if (stamp === null) return;
-		if (owner !== undefined && stamp.generation !== owner) return;
-		this.stamped = null;
-		for (const { el, name, class: viewClass } of stamp.stamped) {
-			if (name === "") {
+	/** Takes back the names this controller marked, leaving styles as found. */
+	private clearVTNames(owner?: number): void {
+		const marked = this.markedVTNames;
+		if (marked === null) return;
+		if (owner !== undefined && marked.generation !== owner) return;
+		this.markedVTNames = null;
+		for (const {
+			el,
+			styleAttribute,
+			inlineName,
+			inlineClass,
+		} of marked.names) {
+			// The swap may have morphed this node into the destination's
+			// element, whose markup owns the attribute from then on. Restoring
+			// the origin's values would remove the destination's transition
+			// styles, even when it names the element the same way the mark
+			// did.
+			if (el.getAttribute("style") !== styleAttribute) continue;
+			if (inlineName === "") {
 				el.style.removeProperty("view-transition-name");
 			} else {
-				el.style.setProperty("view-transition-name", name);
+				el.style.setProperty("view-transition-name", inlineName);
 			}
-			if (viewClass === "") {
+			if (inlineClass === "") {
 				el.style.removeProperty("view-transition-class");
 			} else {
-				el.style.setProperty("view-transition-class", viewClass);
+				el.style.setProperty("view-transition-class", inlineClass);
 			}
 		}
 	}

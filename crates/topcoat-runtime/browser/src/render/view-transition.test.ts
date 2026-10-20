@@ -14,7 +14,10 @@ afterEach(() => {
 });
 
 /** A startViewTransition double recording calls and running the updates. */
-function stubViewTransition(throwOnOptions = false): {
+function stubViewTransition(
+	throwOnOptions = false,
+	ready: Promise<void> = Promise.resolve(),
+): {
 	calls: unknown[];
 } {
 	const calls: unknown[] = [];
@@ -32,6 +35,7 @@ function stubViewTransition(throwOnOptions = false): {
 		update();
 		return {
 			updateCallbackDone: Promise.resolve(),
+			ready,
 			finished: Promise.resolve(),
 		};
 	};
@@ -120,5 +124,45 @@ it("still transitions where the options form is unsupported", async () => {
 	// touched, so retrying plainly animates without the app's keyframes.
 	expect(vt.calls).toHaveLength(2);
 	expect(typeof vt.calls[1]).toBe("function");
+	expect(ran).toBe(true);
+});
+
+it("releases the caller only after the browser captured the new state", async () => {
+	let capture!: () => void;
+	const ready = new Promise<void>((resolve) => {
+		capture = resolve;
+	});
+	stubViewTransition(false, ready);
+	let released = false;
+	const transition = startTypedTransition(["expand"], () => {}).then(() => {
+		released = true;
+	});
+
+	// The update callback has finished, but the browser has not taken the
+	// new page's snapshot yet, so later DOM changes would be captured.
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	expect(released).toBe(false);
+
+	capture();
+	await transition;
+	expect(released).toBe(true);
+});
+
+it("continues when the browser skips the transition", async () => {
+	const skipped = Promise.reject(
+		new DOMException("skipped", "InvalidStateError"),
+	);
+	// The promise is handled by the transition itself; this keeps the test
+	// runner from reporting it before that handler is attached.
+	skipped.catch(() => {});
+	stubViewTransition(false, skipped);
+	let ran = false;
+
+	await startTypedTransition(["expand"], () => {
+		ran = true;
+	});
+
+	// A duplicate `view-transition-name` rejects `ready` after the update
+	// applied, so the caller must settle instead of surfacing the rejection.
 	expect(ran).toBe(true);
 });

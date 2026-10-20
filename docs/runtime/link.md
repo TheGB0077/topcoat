@@ -193,7 +193,7 @@ Ok(view! {
 # }
 ```
 
-The marker names the element to capture, so the browser pairs it with the destination's element carrying the same name. The runtime sets that name when the link is followed and removes it once the capture is done, so you never write the timing or clean it up. Marking an element is inert on its own, and the marker may name any element, not only an image.
+The marker's value becomes the element's `view-transition-name` when the link is followed, pairing it with the destination element that carries the same name. The runtime writes the name before the browser snapshots the current page and cleans up its own mark after the swap, so you never write the timing or clean it up. After the swap, the destination's markup determines the styles the element keeps. The marker is inert on its own, and it may go on any element, not only an image.
 
 A link may mark more than one element, to morph several at once. Each needs its **own** name: a `view-transition-name` must be unique among the elements rendered when the transition starts, so marking two elements with the same name makes the browser skip the animation. Pair each origin with one destination, and give every pair its own name.
 
