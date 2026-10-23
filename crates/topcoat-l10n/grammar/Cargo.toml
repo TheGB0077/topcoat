@@ -1,0 +1,45 @@
+[package]
+name = "topcoat-l10n-grammar"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+
+[features]
+fluent = [
+	"dep:proc-macro2",
+	"proc-macro2/span-locations",
+	"dep:quote",
+	"dep:syn",
+	"dep:topcoat-core-grammar",
+	"dep:fluent-syntax",
+	"dep:icu_locale",
+	"dep:icu_locale_core",
+]
+
+[dependencies]
+topcoat-core-grammar = { workspace = true, optional = true }
+
+fluent-syntax = { workspace = true, optional = true }
+icu_locale = { workspace = true, optional = true }
+icu_locale_core = { workspace = true, optional = true, features = ["alloc"] }
+proc-macro2 = { workspace = true, optional = true }
+quote = { workspace = true, optional = true }
+syn = { workspace = true, optional = true }
+
+[dev-dependencies]
+topcoat-core-grammar = { workspace = true, features = ["testing"] }
+
+tempfile.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

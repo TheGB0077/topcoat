@@ -38,6 +38,9 @@ pub mod htmx;
 #[cfg(feature = "icon")]
 pub mod icon;
 
+#[cfg(feature = "l10n")]
+pub mod l10n;
+
 #[cfg(feature = "mail")]
 pub mod mail;
 
