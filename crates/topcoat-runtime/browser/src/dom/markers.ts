@@ -138,9 +138,22 @@ export function parseComment(node: Comment): CommentMarker | null {
 	return null;
 }
 
+const COMMENT_REFERENCES: Record<string, string> = {
+	"&amp;": "&",
+	"&lt;": "<",
+	"&gt;": ">",
+	"&quot;": '"',
+};
+
+/**
+ * Decodes the character references the server writes into comment payloads.
+ *
+ * The browser does not decode comment contents, and parsing the payload as
+ * HTML would read any `<` in it as the start of an element.
+ */
 function decodeHtml(value: string): string {
-	const decoded = new DOMParser().parseFromString(value, "text/html")
-		.documentElement.textContent;
-	if (decoded === null) throw new Error("Failed to decode comment marker");
-	return decoded;
+	return value.replace(
+		/&(?:amp|lt|gt|quot);/g,
+		(reference) => COMMENT_REFERENCES[reference] ?? reference,
+	);
 }

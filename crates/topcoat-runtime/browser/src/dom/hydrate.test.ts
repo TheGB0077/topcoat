@@ -24,6 +24,32 @@ it("parses signal values without resolving their references", () => {
 	});
 });
 
+it("parses a signal value that contains markup", () => {
+	// The server leaves `<` unescaped in comment payloads, so it must not be
+	// read as the start of an element.
+	const marker = document.createComment(
+		"::topcoat::signal({&quot;t&quot;:&quot;signal&quot;,&quot;id&quot;:&quot;b&quot;," +
+			"&quot;v&quot;:&quot;<script&gt;alert(1)</script&gt; &amp;lt;&quot;})",
+	);
+
+	expect(parseComment(marker)).toEqual({
+		kind: "signal",
+		id: "b",
+		value: "<script>alert(1)</script> &lt;",
+	});
+});
+
+it("parses an expression that contains markup", () => {
+	const marker = document.createComment(
+		'::topcoat::expr::start("a<b &amp;&amp; c == &quot;<p&gt;&quot;")',
+	);
+
+	expect(parseComment(marker)).toEqual({
+		kind: "expr-start",
+		js: 'a<b && c == "<p>"',
+	});
+});
+
 it("parses a connection requirement", () => {
 	expect(parseComment(document.createComment("::topcoat::connect"))).toEqual({
 		kind: "connect",
