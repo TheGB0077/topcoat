@@ -49,6 +49,8 @@ changelog_include = [
     "topcoat-icon-grammar",
     "topcoat-icon-macro",
     "topcoat-l10n",
+    "topcoat-l10n-grammar",
+    "topcoat-l10n-macro",
     "topcoat-mail",
     "topcoat-mail-grammar",
     "topcoat-mail-macro",
@@ -144,6 +146,16 @@ version_group = "topcoat"
 
 [[package]]
 name = "topcoat-l10n"
+release = true
+version_group = "topcoat"
+
+[[package]]
+name = "topcoat-l10n-grammar"
+release = true
+version_group = "topcoat"
+
+[[package]]
+name = "topcoat-l10n-macro"
 release = true
 version_group = "topcoat"
 
