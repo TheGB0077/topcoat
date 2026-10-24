@@ -1,0 +1,2 @@
+# Toasty splits migrations on LF-only breakpoint markers (tokio-rs/toasty#1303)
+*.sql text eol=lf
