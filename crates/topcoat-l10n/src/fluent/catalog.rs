@@ -3,7 +3,7 @@ use std::{borrow::Cow, sync::Arc};
 use fluent_bundle::{FluentArgs, FluentResource, concurrent::FluentBundle};
 use icu_locale_core::DataLocale;
 
-use crate::{Locale, format_value, lookup_index, lookup_indices, normalize_for_lookup};
+use crate::{Argument, Locale, format_value, lookup_index, lookup_indices, normalize_for_lookup};
 
 /// A collection of Fluent messages translated into several locales.
 ///
@@ -76,7 +76,7 @@ impl Catalog {
         &self.locales
     }
 
-    /// Formats a message or attribute using `args`.
+    /// Formats a message or attribute using the named `args`.
     ///
     /// Uses [`lookup`](crate::lookup) to choose a locale. Returns `None` if no locale
     /// matches or the selected locale has no matching message or attribute.
@@ -86,7 +86,7 @@ impl Catalog {
         locale: &Locale,
         id: &str,
         attribute: Option<&str>,
-        args: Option<&FluentArgs<'_>>,
+        args: &[(&str, Argument<'_>)],
     ) -> Option<Cow<'_, str>> {
         let index = lookup_index(locale, &self.normalized)?;
         self.bundles[index].format(id, attribute, args)
@@ -115,6 +115,10 @@ impl LocaleBundle {
         bundle
             .add_builtins()
             .expect("the builtin functions are added to a new bundle");
+        #[cfg(feature = "datetime")]
+        bundle
+            .add_function("DATETIME", crate::DATETIME)
+            .expect("`DATETIME` is added to a new bundle");
         for resource in sources {
             assert!(
                 bundle.add_resource(Arc::clone(resource)).is_ok(),
@@ -143,17 +147,21 @@ impl LocaleBundle {
         &self,
         id: &str,
         attribute: Option<&str>,
-        args: Option<&FluentArgs<'_>>,
+        args: &[(&str, Argument<'_>)],
     ) -> Option<Cow<'_, str>> {
         let message = self.0.get_message(id)?;
         let pattern = match attribute {
             Some(attribute) => message.get_attribute(attribute)?.value(),
             None => message.value()?,
         };
+        let args: FluentArgs<'_> = args
+            .iter()
+            .map(|(name, value)| (*name, value.to_fluent()))
+            .collect();
         // Errors come from arguments that do not fit the message. The text
         // still shows the message, with the faulty parts marked.
         let mut errors = Vec::new();
-        Some(self.0.format_pattern(pattern, args, &mut errors))
+        Some(self.0.format_pattern(pattern, Some(&args), &mut errors))
     }
 }
 
@@ -186,10 +194,8 @@ login-input = Anmelden
         Catalog::new([(locale!("en"), &[EN][..]), (locale!("de"), &[DE][..])])
     }
 
-    fn count(count: f64) -> FluentArgs<'static> {
-        let mut args = FluentArgs::new();
-        args.set("count", count);
-        args
+    fn count(count: f64) -> [(&'static str, Argument<'static>); 1] {
+        [("count", Argument::from(count))]
     }
 
     #[test]
@@ -197,13 +203,13 @@ login-input = Anmelden
         let catalog = catalog();
         assert_eq!(
             catalog
-                .format(&locale!("de-AT"), "title", None, None)
+                .format(&locale!("de-AT"), "title", None, &[])
                 .as_deref(),
             Some("Willkommen")
         );
         assert_eq!(
             catalog
-                .format(&locale!("en-US"), "title", None, None)
+                .format(&locale!("en-US"), "title", None, &[])
                 .as_deref(),
             Some("Welcome")
         );
@@ -212,21 +218,21 @@ login-input = Anmelden
     #[test]
     fn returns_none_when_no_locale_serves_the_requested_one() {
         let catalog = catalog();
-        assert_eq!(catalog.format(&locale!("ja"), "title", None, None), None);
+        assert_eq!(catalog.format(&locale!("ja"), "title", None, &[]), None);
     }
 
     #[test]
     fn returns_none_for_a_message_the_locale_lacks() {
         let catalog = catalog();
         assert_eq!(
-            catalog.format(&locale!("de"), "only-english", None, None),
+            catalog.format(&locale!("de"), "only-english", None, &[]),
             None
         );
         assert_eq!(
-            catalog.format(&locale!("de"), "login-input", Some("placeholder"), None),
+            catalog.format(&locale!("de"), "login-input", Some("placeholder"), &[]),
             None
         );
-        assert_eq!(catalog.format(&locale!("de"), "missing", None, None), None);
+        assert_eq!(catalog.format(&locale!("de"), "missing", None, &[]), None);
     }
 
     #[test]
@@ -234,7 +240,7 @@ login-input = Anmelden
         let catalog = catalog();
         assert_eq!(
             catalog
-                .format(&locale!("en"), "login-input", Some("placeholder"), None)
+                .format(&locale!("en"), "login-input", Some("placeholder"), &[])
                 .as_deref(),
             Some("Your name")
         );
@@ -245,7 +251,7 @@ login-input = Anmelden
         let catalog = catalog();
         let args = count(1234.0);
         let text = catalog
-            .format(&locale!("de"), "items", None, Some(&args))
+            .format(&locale!("de"), "items", None, &args)
             .expect("German has the message");
         assert!(
             text.contains("1.234") && text.ends_with(" Artikel"),
@@ -254,7 +260,7 @@ login-input = Anmelden
         let args = count(1.0);
         assert_eq!(
             catalog
-                .format(&locale!("de"), "items", None, Some(&args))
+                .format(&locale!("de"), "items", None, &args)
                 .as_deref(),
             Some("Ein Artikel")
         );
@@ -264,11 +270,11 @@ login-input = Anmelden
     fn combines_the_sources_of_a_locale() {
         let catalog = Catalog::new([(locale!("en"), &["a = A\n", "b = B\n"][..])]);
         assert_eq!(
-            catalog.format(&locale!("en"), "a", None, None).as_deref(),
+            catalog.format(&locale!("en"), "a", None, &[]).as_deref(),
             Some("A")
         );
         assert_eq!(
-            catalog.format(&locale!("en"), "b", None, None).as_deref(),
+            catalog.format(&locale!("en"), "b", None, &[]).as_deref(),
             Some("B")
         );
     }
@@ -281,20 +287,20 @@ login-input = Anmelden
         ]);
         assert_eq!(
             catalog
-                .format(&locale!("de-CH"), "title", None, None)
+                .format(&locale!("de-CH"), "title", None, &[])
                 .as_deref(),
             Some("Gruezi")
         );
         assert_eq!(
             catalog
-                .format(&locale!("de-CH"), "login-input", None, None)
+                .format(&locale!("de-CH"), "login-input", None, &[])
                 .as_deref(),
             Some("Anmelden")
         );
         // The parent keeps its own messages.
         assert_eq!(
             catalog
-                .format(&locale!("de"), "title", None, None)
+                .format(&locale!("de"), "title", None, &[])
                 .as_deref(),
             Some("Willkommen")
         );
@@ -309,7 +315,7 @@ login-input = Anmelden
         ]);
         assert_eq!(
             catalog
-                .format(&locale!("en-US"), "color", None, None)
+                .format(&locale!("en-US"), "color", None, &[])
                 .as_deref(),
             Some("Color")
         );
@@ -325,7 +331,7 @@ login-input = Anmelden
         ]);
         assert_eq!(
             catalog
-                .format(&locale!("en-AU"), "color", None, None)
+                .format(&locale!("en-AU"), "color", None, &[])
                 .as_deref(),
             Some("Colour")
         );
