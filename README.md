@@ -226,7 +226,6 @@ view! { <link rel="stylesheet" href=(topcoat::tailwind::stylesheet!())> }
 **Working with requests**
 - [Context (`Cx`)](https://docs.rs/topcoat/latest/topcoat/context/index.html): read request data and values stored by type. Add shared values with the router builder's `.with`, or use `cx.with` to add a value for part of a request.
 - [Memoization](https://docs.rs/topcoat/latest/topcoat/context/attr.memoize.html): `#[memoize]` for per-request caching and fan-out dedup.
-- [Functions, not middlewares](https://docs.rs/topcoat/latest/topcoat/context/index.html#functions-not-middlewares): the recommended way to model auth and other request-scoped concerns.
 - [Cookies](https://docs.rs/topcoat/latest/topcoat/cookie/index.html): read and write the request cookie jar, with signed, encrypted, and prefixed cookies.
 - [Sessions](https://docs.rs/topcoat/latest/topcoat/session/index.html): bring-your-own-storage session authentication: login/logout lifecycle, sliding expiration, and token rotation.
 
