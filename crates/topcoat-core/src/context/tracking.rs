@@ -1,21 +1,18 @@
-//! Tracking of request context reads, backing `#[memoize]`'s dependency
-//! checks.
+//! Records context reads so `#[memoize]` can decide when to reuse a result.
 
 use std::{
     any::{Any, TypeId},
     sync::{Arc, Mutex},
 };
 
-use crate::context::{BindingId, RequestContext};
+use crate::context::{BindingId, Scope};
 
-/// One observed request context read: the type that was looked up and the
-/// identity of the binding it resolved to, or `None` if no value was
-/// registered.
+/// A saved context lookup, including its type and the binding ID it found.
+/// A missing value is recorded as `None`.
 ///
-/// A read stays valid for a context as long as that context resolves the same
-/// type to the same binding. Scopes only ever add or shadow bindings, so a
-/// read is invalidated in exactly one of two ways: a present read by
-/// shadowing the type, an absence read by registering it.
+/// A saved read matches a context if looking up its type finds the same
+/// binding ID. Replacing the value breaks that match. If the read found
+/// nothing, adding a value of that type breaks the match too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ContextRead {
     type_id: TypeId,
@@ -34,34 +31,31 @@ impl ContextRead {
         }
     }
 
-    /// Returns whether `context` still resolves this read's type to the
-    /// binding that was observed.
-    pub(crate) fn matches(&self, context: &RequestContext) -> bool {
-        context.binding_id(self.type_id) == self.binding_id
+    /// Checks whether `scope` would return the same binding as this read.
+    pub(crate) fn matches(&self, scope: &Scope) -> bool {
+        scope.binding_id(self.type_id) == self.binding_id
     }
 }
 
-/// Records the request context reads made through one tracked call.
+/// Collects context reads for one function call.
 ///
-/// A tracker is installed on a [`Cx`] handle with [`Cx::track`] and travels
-/// with every handle derived from it, including clones moved to other
-/// threads. Each read is checked against the scope the tracked call was
-/// entered with: a read that resolves differently there went through a
-/// binding the tracked body created itself, which its caller cannot see, so
-/// it is not a dependency and is dropped.
+/// [`Cx::track`] attaches the tracker to a handle. Children and clones keep
+/// it, including clones sent to other threads. The tracker compares reads
+/// with the context at the start of the call. It ignores reads of values
+/// added by the function itself, since those do not depend on the caller.
 ///
 /// [`Cx`]: crate::context::Cx
 /// [`Cx::track`]: crate::context::Cx::track
 #[derive(Debug)]
 pub(crate) struct ContextTracker {
     /// The scope the tracked call was entered with.
-    entry: Arc<RequestContext>,
+    entry: Arc<Scope>,
     reads: Mutex<Vec<ContextRead>>,
 }
 
 impl ContextTracker {
     /// Creates a tracker for a call entered with the scope `entry`.
-    pub(crate) fn new(entry: Arc<RequestContext>) -> Self {
+    pub(crate) fn new(entry: Arc<Scope>) -> Self {
         Self {
             entry,
             reads: Mutex::new(Vec::new()),
@@ -83,8 +77,7 @@ impl ContextTracker {
     /// call created itself, so it is not a dependency and is dropped, even
     /// where it was a genuine dependency of the nested call.
     pub(crate) fn merge(&self, reads: &[ContextRead]) {
-        // A body that read no request context has nothing to contribute, and is
-        // common enough to be worth keeping off the lock.
+        // Skip the lock when the function read no context values.
         if reads.is_empty() {
             return;
         }
@@ -109,82 +102,62 @@ impl ContextTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::{Cx, request_context, try_request_context};
+    use crate::context::{Cx, context, try_context};
 
     struct Session;
     struct Theme;
 
-    /// Records what `context` currently resolves `T` to.
-    fn observe<T: Any>(context: &RequestContext) -> ContextRead {
-        ContextRead::new::<T>(context.binding_id(TypeId::of::<T>()))
-    }
-
     /// Observes what `cx`'s scope currently resolves `T` to, for building
     /// expected reads.
     fn expected<T: Any>(cx: &Cx) -> ContextRead {
-        observe::<T>(&cx.state.request_context)
+        ContextRead::new::<T>(cx.scope().binding_id(TypeId::of::<T>()))
     }
 
     #[test]
-    fn a_present_read_matches_its_own_context() {
-        let mut context = RequestContext::new();
-        context.insert(Session);
+    fn a_present_read_matches_its_own_scope() {
+        let cx = Cx::default().with(Session);
 
-        let read = observe::<Session>(&context);
-        assert!(read.matches(&context));
+        let read = expected::<Session>(&cx);
+        assert!(read.matches(cx.scope()));
     }
 
     #[test]
     fn shadowing_invalidates_a_present_read() {
-        let mut context = RequestContext::new();
-        context.insert(Session);
-        let read = observe::<Session>(&context);
+        let cx = Cx::default().with(Session);
+        let read = expected::<Session>(&cx);
 
-        let mut shadowed = context.clone();
-        shadowed.insert(Session);
+        let shadowed = cx.with(Session);
 
-        assert!(read.matches(&context));
-        assert!(!read.matches(&shadowed));
+        assert!(read.matches(cx.scope()));
+        assert!(!read.matches(shadowed.scope()));
     }
 
     #[test]
     fn an_absence_read_matches_while_the_type_is_absent() {
-        let context = RequestContext::new();
-        let read = observe::<Session>(&context);
-        assert!(read.matches(&context));
+        let cx = Cx::default();
+        let read = expected::<Session>(&cx);
+        assert!(read.matches(cx.scope()));
     }
 
     #[test]
     fn registering_the_type_invalidates_an_absence_read() {
-        let context = RequestContext::new();
-        let read = observe::<Session>(&context);
+        let cx = Cx::default();
+        let read = expected::<Session>(&cx);
 
-        let mut extended = context.clone();
-        extended.insert(Session);
+        let extended = cx.with(Session);
 
-        assert!(read.matches(&context));
-        assert!(!read.matches(&extended));
+        assert!(read.matches(cx.scope()));
+        assert!(!read.matches(extended.scope()));
     }
 
     #[test]
     fn an_unrelated_binding_leaves_a_read_valid() {
-        let mut context = RequestContext::new();
-        context.insert(Session);
-        let read = observe::<Session>(&context);
+        let cx = Cx::default().with(Session);
+        let read = expected::<Session>(&cx);
 
-        let mut extended = context.clone();
-        extended.insert(Theme);
+        let extended = cx.with(Theme);
 
-        assert!(read.matches(&extended));
-    }
-
-    #[test]
-    fn a_cloned_context_keeps_reads_valid() {
-        let mut context = RequestContext::new();
-        context.insert(Session);
-        let read = observe::<Session>(&context);
-
-        assert!(read.matches(&context.clone()));
+        assert!(read.matches(extended.scope()));
     }
 
     #[test]
@@ -192,7 +165,7 @@ mod tests {
         let cx = Cx::default().with(Session);
         let (child, tracker) = cx.track();
 
-        let _: &Session = request_context(&child);
+        let _: &Session = context(&child);
 
         assert_eq!(tracker.take_reads(), [expected::<Session>(&cx)]);
     }
@@ -202,7 +175,7 @@ mod tests {
         let cx = Cx::default();
         let (child, tracker) = cx.track();
 
-        assert!(try_request_context::<Session>(&child).is_none());
+        assert!(try_context::<Session>(&child).is_none());
         assert_eq!(tracker.take_reads(), [expected::<Session>(&cx)]);
     }
 
@@ -211,8 +184,8 @@ mod tests {
         let cx = Cx::default().with(Session);
         let (child, tracker) = cx.track();
 
-        let _ = try_request_context::<Session>(&child);
-        let _ = try_request_context::<Session>(&child);
+        let _ = try_context::<Session>(&child);
+        let _ = try_context::<Session>(&child);
 
         assert_eq!(tracker.take_reads(), [expected::<Session>(&cx)]);
     }
@@ -222,8 +195,8 @@ mod tests {
         let cx = Cx::default().with(Session);
         let (child, tracker) = cx.track();
 
-        let _ = try_request_context::<Session>(&child);
-        let _ = try_request_context::<Theme>(&child);
+        let _ = try_context::<Session>(&child);
+        let _ = try_context::<Theme>(&child);
 
         assert_eq!(
             tracker.take_reads(),
@@ -237,7 +210,7 @@ mod tests {
         let (child, tracker) = cx.track();
         let derived = child.with(Theme);
 
-        let _ = try_request_context::<Session>(&derived);
+        let _ = try_context::<Session>(&derived);
 
         assert_eq!(tracker.take_reads(), [expected::<Session>(&cx)]);
     }
@@ -248,7 +221,7 @@ mod tests {
         let (child, tracker) = cx.track();
         let derived = child.with(Theme);
 
-        let _ = try_request_context::<Theme>(&derived);
+        let _ = try_context::<Theme>(&derived);
 
         assert_eq!(tracker.take_reads(), []);
     }
@@ -259,7 +232,7 @@ mod tests {
         let (child, tracker) = cx.track();
         let derived = child.with(Session);
 
-        let _ = try_request_context::<Session>(&derived);
+        let _ = try_context::<Session>(&derived);
 
         assert_eq!(tracker.take_reads(), []);
     }
@@ -269,7 +242,7 @@ mod tests {
         let cx = Cx::default().with(Session);
         let (_child, tracker) = cx.track();
 
-        let _ = try_request_context::<Session>(&cx);
+        let _ = try_context::<Session>(&cx);
 
         assert_eq!(tracker.take_reads(), []);
     }
@@ -279,7 +252,7 @@ mod tests {
         let cx = Cx::default().with(Session);
         let (child, tracker) = cx.track();
 
-        let _ = try_request_context::<Session>(&child.clone());
+        let _ = try_context::<Session>(&child.clone());
 
         assert_eq!(tracker.take_reads(), [expected::<Session>(&cx)]);
     }
@@ -290,7 +263,7 @@ mod tests {
         let (child, tracker) = cx.track();
 
         std::thread::spawn(move || {
-            let _ = try_request_context::<Session>(&child);
+            let _ = try_context::<Session>(&child);
         })
         .join()
         .expect("tracked thread panicked");
@@ -317,7 +290,7 @@ mod tests {
         let (child, outer) = cx.track();
         let (nested, inner) = child.track();
 
-        let _ = try_request_context::<Session>(&nested);
+        let _ = try_context::<Session>(&nested);
 
         assert_eq!(outer.take_reads(), []);
         assert_eq!(inner.take_reads(), [expected::<Session>(&cx)]);

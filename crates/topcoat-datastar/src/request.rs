@@ -1,20 +1,14 @@
 use topcoat_core::context::Cx;
-use topcoat_router::request::headers;
+use topcoat_router::request::try_headers;
 
 use crate::header;
 
 /// Returns whether the request carries `Datastar-Request: true`.
-///
-/// # Panics
-///
-/// Panics if called outside a router request (no request
-/// [`Parts`](http::request::Parts) in context).
 #[inline]
 #[must_use]
-#[track_caller]
 pub fn datastar_request(cx: &Cx) -> bool {
-    headers(cx)
-        .get(&header::DATASTAR_REQUEST)
+    try_headers(cx)
+        .and_then(|headers| headers.get(&header::DATASTAR_REQUEST))
         .and_then(|value| value.to_str().ok())
         == Some("true")
 }
@@ -22,7 +16,7 @@ pub fn datastar_request(cx: &Cx) -> bool {
 #[cfg(test)]
 mod tests {
     use http::Request;
-    use topcoat_core::context::CxTestBuilder;
+    use topcoat_core::context::Cx;
 
     use super::*;
 
@@ -33,7 +27,7 @@ mod tests {
         }
 
         let (parts, ()) = builder.body(()).unwrap().into_parts();
-        CxTestBuilder::new().request_context(parts).build()
+        Cx::default().with(parts)
     }
 
     #[test]
@@ -47,5 +41,6 @@ mod tests {
             "false"
         )])));
         assert!(!datastar_request(&cx_with(&[])));
+        assert!(!datastar_request(&Cx::default()));
     }
 }

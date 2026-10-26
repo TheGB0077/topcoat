@@ -1,6 +1,6 @@
 # Context
 
-A page that reads the request path and headers through `Cx`.
+This example reads shared and local values through `Cx`. The router gives every request the same page view counter and a default greeting. A layer uses `cx.with` to change the greeting for `/formal`. A plain function reads the current request path.
 
 Clone the Topcoat repository:
 

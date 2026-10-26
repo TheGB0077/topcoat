@@ -39,7 +39,6 @@ members = [
     "crates/topcoat-view/macro",
 
     "examples/alpine-ajax",
-    "examples/app-context",
     "examples/asset",
     "examples/cloudflare-worker",
     "examples/context",
@@ -155,7 +154,6 @@ topcoat-view-grammar = { version = "0.11.0", path = "crates/topcoat-view/grammar
 topcoat-view-macro = { version = "0.11.0", path = "crates/topcoat-view/macro" }
 
 anyhow = "1.0"
-anymap3 = "1.0"
 argon2 = "0.6"
 askama = "0.16.1"
 base64 = "0.22"

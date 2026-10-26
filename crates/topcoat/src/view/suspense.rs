@@ -3,7 +3,7 @@
 
 use crate::{
     Result,
-    context::{Cx, identity, try_app_context, try_request_context},
+    context::{Cx, identity, try_context},
     core::identity::SiteKey,
     view::{Child, RegionId, View, component, internal::SuspenseView},
 };
@@ -118,28 +118,22 @@ pub enum SuspenseMode {
     Wait,
 }
 
-/// Returns the default mode for [`suspense`] in this context.
+/// Reads the default [`suspense`] mode for this context.
 ///
-/// Checks these sources in order and uses the first value it finds:
-///
-/// 1. A `SuspenseMode` in the request context.
-/// 2. A `SuspenseMode` in the app context.
-/// 3. [`SuspenseMode::Stream`].
+/// Returns the context's `SuspenseMode`, falling back to
+/// [`SuspenseMode::Stream`] when no value is set.
 #[must_use]
 pub fn suspense_mode(cx: &Cx) -> SuspenseMode {
-    try_request_context::<SuspenseMode>(cx)
-        .or_else(|| try_app_context::<SuspenseMode>(cx))
-        .copied()
-        .unwrap_or_default()
+    try_context::<SuspenseMode>(cx).copied().unwrap_or_default()
 }
 
 /// Configures the default suspense mode on a [`RouterBuilder`](crate::router::RouterBuilder).
 #[cfg(feature = "router")]
 pub trait RouterSuspenseExt {
-    /// Sets the default mode for the router's [`suspense`] boundaries.
+    /// Chooses the default mode for [`suspense`] boundaries on this router.
     ///
-    /// Stores `mode` in the app context. A boundary's `mode` argument or a
-    /// `SuspenseMode` in the request context overrides this default.
+    /// Adds `mode` to the router's context. Override it with [`Cx::with`]
+    /// for a child context or with the `mode` argument on one boundary.
     ///
     /// ```rust
     /// use topcoat::{
@@ -149,20 +143,14 @@ pub trait RouterSuspenseExt {
     ///
     /// let router = Router::builder().suspense(SuspenseMode::Wait).build();
     /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if a `SuspenseMode` is already registered in the app context.
     #[must_use]
-    #[track_caller]
     fn suspense(self, mode: SuspenseMode) -> Self;
 }
 
 #[cfg(feature = "router")]
 impl RouterSuspenseExt for crate::router::RouterBuilder {
-    #[track_caller]
     fn suspense(self, mode: SuspenseMode) -> Self {
-        self.app_context(mode)
+        self.with(mode)
     }
 }
 

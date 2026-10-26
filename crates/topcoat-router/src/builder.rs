@@ -6,7 +6,10 @@ use std::{
     sync::Arc,
 };
 
-use topcoat_core::{base_url::BaseUrl, context::AppContext};
+use topcoat_core::{
+    base_url::BaseUrl,
+    context::{ContextMap, ContextValues},
+};
 
 use crate::{
     Endpoint, EndpointIndex, Endpoints, Layer, Layout, Methods, OriginLayer, OriginPolicy, Page,
@@ -37,7 +40,7 @@ use crate::{
 ///         .discover()
 ///         .cookies()
 ///         .assets(AssetBundle::load().unwrap())
-///         .app_context(AppConfig::load())
+///         .with(AppConfig::load())
 ///         .build()
 /// }
 /// ```
@@ -46,7 +49,7 @@ pub struct RouterBuilder {
     pages: Vec<Box<dyn Page>>,
     layouts: Vec<Arc<dyn Layout>>,
     layers: Vec<Arc<dyn Layer>>,
-    context: AppContext,
+    context: ContextMap,
     origin_policy: OriginPolicy,
     trusted_proxies: TrustedProxies,
     trailing_slash: TrailingSlash,
@@ -58,15 +61,12 @@ impl RouterBuilder {
     /// Creates an empty builder with no routes registered.
     #[must_use]
     pub fn new() -> Self {
-        let mut context = AppContext::new();
-        // Register `()` so APIs generic over an app context type can default to `S = ()`.
-        context.insert(());
         Self {
             routes: Vec::new(),
             pages: Vec::new(),
             layouts: Vec::new(),
             layers: Vec::new(),
-            context,
+            context: ContextMap::new(),
             origin_policy: OriginPolicy::new(),
             trusted_proxies: TrustedProxies::new(),
             trailing_slash: TrailingSlash::default(),
@@ -299,8 +299,7 @@ impl RouterBuilder {
     ///
     /// # Panics
     ///
-    /// Panics if the value is not a valid base URL, or if a base URL has
-    /// already been registered.
+    /// Panics if `base_url` cannot be parsed as a valid base URL.
     ///
     /// # Examples
     ///
@@ -313,25 +312,24 @@ impl RouterBuilder {
     #[track_caller]
     pub fn base_url(self, base_url: impl TryInto<BaseUrl, Error: fmt::Display>) -> Self {
         match base_url.try_into() {
-            Ok(base_url) => self.app_context(base_url),
+            Ok(base_url) => self.with(base_url),
             Err(error) => panic!("{error}"),
         }
     }
 
-    /// Shares a value of type `T` across this router's requests.
+    /// Adds a value that all requests to this router can share.
     ///
-    /// Borrow it with [`app_context`](topcoat_core::context::app_context).
-    ///
-    /// # Panics
-    ///
-    /// Panics if a value has already been registered for the same type.
+    /// Read it with [`context`](topcoat_core::context::context). Adding the
+    /// same type again on the builder replaces its value. During a request,
+    /// [`Cx::with`](topcoat_core::context::Cx::with) can override it in a child
+    /// context without changing the router's value.
     ///
     /// # Examples
     ///
     /// ```rust
     /// # struct User;
     /// use topcoat::{
-    ///     context::{Cx, app_context},
+    ///     context::{Cx, context},
     ///     router::{Router, module_router},
     /// };
     ///
@@ -342,50 +340,64 @@ impl RouterBuilder {
     /// # }
     ///
     /// pub fn router() -> Router {
-    ///     module_router!().app_context(Database::connect()).build()
+    ///     module_router!().with(Database::connect()).build()
     /// }
     ///
     /// async fn fetch_user(cx: &Cx, id: u64) -> User {
-    ///     let db: &Database = app_context(cx);
+    ///     let db: &Database = context(cx);
     ///     db.fetch_user(id).await
     /// }
     /// ```
     #[must_use]
-    #[track_caller]
-    pub fn app_context<T>(mut self, value: T) -> Self
+    pub fn with<T>(mut self, value: T) -> Self
     where
         T: Any + Send + Sync,
     {
-        assert!(
-            self.context.insert(value).is_none(),
-            "duplicate context entry for type `{:?}`",
-            type_name::<T>()
-        );
+        self.context.insert(value);
         self
     }
 
-    /// Returns a reference to the app context value of type `T` registered with
-    /// [`app_context`](Self::app_context), or `None` if none has been
-    /// registered.
+    /// Adds several values for requests to share.
     ///
-    /// Use this to check for an existing value before registering one.
+    /// Pass a tuple or a [`ContextMap`]. Each value is registered as if it
+    /// had been passed to [`with`](Self::with).
     #[must_use]
-    pub fn get_app_context<T>(&self) -> Option<&T>
+    pub fn with_many<V>(mut self, values: V) -> Self
+    where
+        V: ContextValues,
+    {
+        values.install(&mut self.context);
+        self
+    }
+
+    /// Borrows the value of type `T` already added to this builder.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the builder has no value of type `T`.
+    #[must_use]
+    #[track_caller]
+    pub fn context<T>(&self) -> &T
+    where
+        T: Any + Send + Sync,
+    {
+        match self.try_context() {
+            Some(value) => value,
+            None => panic!(
+                "attempted to access context of type `{:?}`, but this type was not registered on the router",
+                type_name::<T>()
+            ),
+        }
+    }
+
+    /// Borrows the value of type `T` already added to this builder, or returns
+    /// `None` if it is absent.
+    #[must_use]
+    pub fn try_context<T>(&self) -> Option<&T>
     where
         T: Any + Send + Sync,
     {
         self.context.get::<T>()
-    }
-
-    /// Returns a mutable reference to the app context value of type `T`
-    /// registered with [`app_context`](Self::app_context), or `None` if none
-    /// has been registered.
-    #[must_use]
-    pub fn get_app_context_mut<T>(&mut self) -> Option<&mut T>
-    where
-        T: Any + Send + Sync,
-    {
-        self.context.get_mut::<T>()
     }
 
     /// Finalizes the registered routes, pages, and layouts into a [`Router`].
@@ -509,7 +521,7 @@ impl RouterBuilder {
             routes,
             endpoints,
             always_layers,
-            app_context: Arc::new(self.context),
+            context: Arc::new(self.context),
             origin: OriginLayer::new(self.origin_policy),
             trusted_proxies: self.trusted_proxies,
             #[cfg(feature = "compression")]
@@ -703,11 +715,12 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "duplicate context entry")]
-    fn duplicate_app_context_type_panics() {
-        let _ = RouterBuilder::new()
-            .app_context(Greeting)
-            .app_context(Greeting);
+    fn a_later_value_replaces_an_earlier_one() {
+        let builder = RouterBuilder::new().with(1u32).with_many((2u32, Greeting));
+
+        assert_eq!(*builder.context::<u32>(), 2);
+        assert!(builder.try_context::<Greeting>().is_some());
+        assert!(builder.try_context::<u64>().is_none());
     }
 
     #[test]

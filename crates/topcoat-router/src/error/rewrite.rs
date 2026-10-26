@@ -2,7 +2,7 @@ use std::{any::Any, sync::Mutex};
 
 use http::{HeaderMap, Method, request::Parts, uri::PathAndQuery};
 use topcoat_core::{
-    context::{ContextValues, RequestContext},
+    context::{ContextMap, ContextValues},
     error::Result,
 };
 
@@ -62,7 +62,7 @@ pub fn rewrite(path: impl AsRef<str>, body: impl Into<Body>) -> RewriteError {
         body: Mutex::new(body.into()),
         method: None,
         headers: None,
-        context: RequestContext::new(),
+        context: ContextMap::new(),
     }
 }
 
@@ -79,7 +79,7 @@ pub struct RewriteError {
     body: Mutex<Body>,
     method: Option<Method>,
     headers: Option<HeaderMap>,
-    context: RequestContext,
+    context: ContextMap,
 }
 
 impl RewriteError {
@@ -102,15 +102,14 @@ impl RewriteError {
         self
     }
 
-    /// Carries `value` into the rewritten dispatch and every dispatch after
-    /// it in the same chain, available through
-    /// [`request_context`](topcoat_core::context::request_context).
+    /// Adds `value` to the rewritten request and keeps it through later
+    /// rewrites. Read it with [`context`](topcoat_core::context::context).
     ///
-    /// Each dispatch starts with a fresh context and memoization cache.
-    /// Only explicitly carried values survive a rewrite. Calling this
-    /// again, or on a later rewrite, replaces a carried value of the same
-    /// type. Values installed by the router, such as the request parts and
-    /// path parameters, take precedence over carried values.
+    /// Each rewrite creates a fresh context and memoization cache. Values
+    /// added during request handling are lost unless explicitly carried
+    /// forward. Calling `with` again with the same type replaces its value,
+    /// including on a later rewrite. Request data supplied by the router,
+    /// such as request parts and path parameters, takes priority.
     #[must_use]
     pub fn with<T>(mut self, value: T) -> Self
     where
@@ -142,7 +141,7 @@ struct RewriteParts {
     body: Body,
     method: Option<Method>,
     headers: Option<HeaderMap>,
-    context: RequestContext,
+    context: ContextMap,
 }
 
 impl std::fmt::Display for RewriteError {
@@ -162,14 +161,14 @@ pub(crate) struct RewriteChain {
     /// Previous dispatches in the order they ran.
     visited: Vec<Dispatch>,
     /// Context values carried forward by rewrites.
-    context: RequestContext,
+    context: ContextMap,
 }
 
 impl RewriteChain {
     /// Starts a rewrite chain with context values for the first request
     /// and any rewrites that follow.
     pub(crate) fn carrying(values: impl ContextValues) -> Self {
-        let mut context = RequestContext::new();
+        let mut context = ContextMap::new();
         values.install(&mut context);
         Self {
             visited: Vec::new(),
@@ -178,7 +177,7 @@ impl RewriteChain {
     }
 
     /// Returns the context values accumulated by earlier rewrites.
-    pub(crate) fn context(&self) -> &RequestContext {
+    pub(crate) fn context(&self) -> &ContextMap {
         &self.context
     }
 

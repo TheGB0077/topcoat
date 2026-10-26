@@ -1,27 +1,26 @@
 //! Mail configuration and sending through the configured transport.
 
 use topcoat_core::{
-    context::{Cx, app_context},
+    context::{Cx, context},
     error::Result,
 };
 
 use crate::{Mail, Receipt, Transport};
 
-/// The transport used to send application mail.
+/// Configuration for sending mail.
 ///
-/// Choose a [`Transport`] with [`MailConfig::builder`] and register the
-/// configuration in app context. Handlers can then call [`send`] without
-/// choosing a transport:
+/// Select a [`Transport`] with [`MailConfig::builder`] and add the resulting
+/// configuration to the context. Calls to [`send`] then use that transport:
 ///
 /// ```
-/// use topcoat_core::context::CxTestBuilder;
+/// use topcoat_core::context::Cx;
 /// use topcoat_mail::{Mail, MailConfig, Mailbox, MemoryTransport, send};
 ///
 /// # async fn example() -> topcoat_core::error::Result<()> {
 /// let config = MailConfig::builder()
 ///     .transport(MemoryTransport::new())
 ///     .build();
-/// let cx = CxTestBuilder::new().app_context(config).build();
+/// let cx = Cx::default().with(config);
 ///
 /// let mail = Mail::builder()
 ///     .from(Mailbox::new("ada@example.com")?)
@@ -81,20 +80,20 @@ impl MailConfigBuilder {
 ///
 /// # Panics
 ///
-/// Panics when no [`MailConfig`] is registered on the app context.
+/// Panics if the context has no [`MailConfig`].
 ///
 /// # Errors
 ///
 /// Returns an error if the message cannot be formatted or delivered.
 /// See [`SendError`](crate::SendError).
 pub async fn send(cx: &Cx, mail: Mail) -> Result<Receipt> {
-    let config: &MailConfig = app_context(cx);
+    let config: &MailConfig = context(cx);
     config.transport.send(cx, mail).await
 }
 
 #[cfg(test)]
 mod tests {
-    use topcoat_core::context::CxTestBuilder;
+    use topcoat_core::context::Cx;
 
     use super::*;
     use crate::{AddressError, Mailbox, MemoryTransport};
@@ -109,9 +108,7 @@ mod tests {
     }
 
     fn cx_with(transport: MemoryTransport) -> Cx {
-        CxTestBuilder::new()
-            .app_context(MailConfig::builder().transport(transport).build())
-            .build()
+        Cx::default().with(MailConfig::builder().transport(transport).build())
     }
 
     #[tokio::test]
@@ -139,7 +136,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[should_panic(expected = "app context")]
+    #[should_panic(expected = "attempted to access context")]
     async fn send_panics_without_a_registered_config() {
         let cx = Cx::default();
         let _ = send(&cx, Mail::builder().build()).await;

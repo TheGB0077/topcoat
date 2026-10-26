@@ -35,13 +35,13 @@ The extractor rejects non-`GET` requests with `405 Method Not Allowed` and inval
 
 # Reading the request context
 
-The callback outlives the handler that upgraded the connection, so it cannot borrow the `Cx` the handler was called with. Clone the `Cx` and move the owned handle into the callback instead; it reads the same app and request context.
+The WebSocket callback runs after the handler returns. To read context values there, clone `Cx` and move the clone into the callback. It keeps access to the same values without borrowing the handler's context:
 
 ```rust
 // src/app/greet.rs
 use topcoat::{
     Result,
-    context::{Cx, request_context},
+    context::{Cx, context},
     router::{
         content::websocket::{Message, WebSocketUpgrade},
         response::Response,
@@ -57,7 +57,7 @@ struct Customer {
 async fn greet(cx: &Cx, upgrade: WebSocketUpgrade) -> Result<Response> {
     let cx = cx.clone();
     upgrade.on_upgrade(move |mut socket| async move {
-        let customer: &Customer = request_context(&cx);
+        let customer: &Customer = context(&cx);
         let _ = socket.send(Message::text(customer.name.as_str())).await;
     })
 }

@@ -54,16 +54,16 @@ use crate::{
 /// }
 /// ```
 ///
-/// The `use<>` bound keeps the stream from borrowing the request context,
-/// which a route's response must not do. A stream that needs the context
-/// clones the [`Cx`] and moves the owned handle in:
+/// The response must not borrow the handler's context. The `use<>` bound
+/// prevents the stream from capturing that borrow. If the stream needs
+/// context values, move a clone of [`Cx`] into it:
 ///
 /// ```rust
 /// // src/app/greetings.rs
 /// use futures_core::Stream;
 /// use topcoat::{
 ///     Result,
-///     context::{Cx, request_context},
+///     context::{Cx, context},
 ///     router::{
 ///         content::sse::{Event, Sse},
 ///         route,
@@ -78,7 +78,7 @@ use crate::{
 /// async fn greetings(cx: &Cx) -> Result<Sse<impl Stream<Item = Result<Event>> + use<>>> {
 ///     let cx = cx.clone();
 ///     let events = futures_util::stream::once(async move {
-///         let customer: &Customer = request_context(&cx);
+///         let customer: &Customer = context(&cx);
 ///         Ok(Event::new().data(customer.name.as_str()))
 ///     });
 ///     Ok(Sse::new(events))

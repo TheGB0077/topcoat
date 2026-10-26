@@ -1,13 +1,18 @@
-mod app_context;
+mod context_map;
 mod id;
-mod request_context;
+mod lookup;
 mod tracking;
 
-use std::{any::Any, panic::Location, sync::Arc};
+use std::{
+    any::{Any, TypeId},
+    iter,
+    panic::Location,
+    sync::Arc,
+};
 
-pub use app_context::*;
+pub use context_map::*;
 pub use id::*;
-pub use request_context::*;
+pub use lookup::*;
 pub(crate) use tracking::*;
 
 pub use crate::memoize::MemoizeAsRef;
@@ -17,45 +22,48 @@ use crate::{
     memoize::MemoizeCache,
 };
 
-/// The request context.
+/// Access to the values and state of one request.
 ///
-/// Add `cx: &Cx` to a handler or component to access context. Topcoat supplies
-/// it automatically. Read shared application values with [`app_context`] and
-/// values scoped to the request with [`request_context`].
+/// Give a handler or component a `cx: &Cx` parameter and Topcoat supplies it.
+/// Use [`context`] or [`try_context`] to read values added on the router or
+/// while handling the request.
 ///
-/// Clones share the request's state. Use [`with`](Self::with) or
-/// [`with_many`](Self::with_many) to add context values in a child scope
-/// without changing the parent. Move an owned clone into work that outlives
-/// the handler, such as a streaming response.
+/// Use [`with`](Self::with) or [`with_many`](Self::with_many) to create a
+/// child context with extra values. The parent stays unchanged. Cloning a
+/// `Cx` shares its state and values. Move a clone into a stream or task that
+/// needs to keep them after the handler returns.
 #[derive(Debug, Default, Clone)]
 pub struct Cx {
-    /// The state shared by handles in the same context scope.
-    state: Arc<CxState>,
+    /// This handle's values and shared request state.
+    scope: Arc<Scope>,
+    /// Records context reads when this handle is used in a tracked call.
+    tracker: Option<Arc<ContextTracker>>,
     /// The identity of this handle's scope.
     identity: Identity,
 }
 
 impl Cx {
-    /// Creates the context for one request over the shared app context, with an
-    /// empty request context.
+    /// Starts a new request context with access to `shared`.
+    ///
+    /// Several requests can use the same map without copying its values.
+    /// Calling [`with`](Self::with) can override a shared value in a child
+    /// context without changing the shared map.
     #[must_use]
-    pub fn new(app_context: Arc<AppContext>) -> Self {
-        Self::from_parts(app_context, RequestContext::new())
-    }
-
-    /// Creates a `Cx` from the given app and request contexts.
-    fn from_parts(app_context: Arc<AppContext>, request_context: RequestContext) -> Self {
+    pub fn new(shared: Arc<ContextMap>) -> Self {
         Self {
-            state: Arc::new(CxState {
-                shared: Arc::new(RequestShared {
+            scope: Arc::new(Scope {
+                request: Arc::new(RequestState {
                     id: CxId::new(),
-                    app_context,
                     memoize_cache: MemoizeCache::new(),
                     abort_store: AbortStore::new(),
                 }),
-                request_context: Arc::new(request_context),
-                tracker: None,
+                values: ContextMap::new(),
+                sealed: Some(Arc::new(Sealed {
+                    values: shared,
+                    parent: None,
+                })),
             }),
+            tracker: None,
             identity: Identity::ROOT,
         }
     }
@@ -64,14 +72,14 @@ impl Cx {
     #[inline]
     #[must_use]
     pub fn id(&self) -> CxId {
-        self.state.shared.id
+        self.scope.request.id
     }
 
-    /// Returns a child context with a key derived from the parent's key,
-    /// this call's source location, and `key`.
+    /// Creates a child identity from this context's identity, the location
+    /// of the call in the source, and `key`.
     ///
-    /// Use `()` to distinguish separate call locations, or an item key to
-    /// distinguish repeated calls at one location:
+    /// Pass `()` when the call location is enough to tell children apart.
+    /// For repeated calls at one location, pass a key for each item:
     ///
     /// ```
     /// # use topcoat_core::context::Cx;
@@ -84,9 +92,9 @@ impl Cx {
     /// }
     /// ```
     ///
-    /// The same inputs produce the same key. Moving the call in source
-    /// changes it. The child shares the parent's request state and context
-    /// values.
+    /// The same inputs give the same identity. Moving the call to another
+    /// source location changes it. The child keeps the parent's request
+    /// state and values.
     #[must_use]
     #[track_caller]
     pub fn keyed(&self, key: impl IdentityKey) -> Self {
@@ -97,141 +105,143 @@ impl Cx {
         }
     }
 
-    /// Returns the request context visible to this handle's scope.
+    /// Returns the scope this handle reads from.
     #[inline]
-    pub(crate) fn request_context(&self) -> &RequestContext {
-        &self.state.request_context
+    pub(crate) fn scope(&self) -> &Scope {
+        &self.scope
     }
 
-    /// Returns the tracker recording this handle's request context reads, if
-    /// one is installed.
+    /// Returns this handle's read tracker, if tracking is enabled.
     #[inline]
     pub(crate) fn tracker(&self) -> Option<&ContextTracker> {
-        self.state.tracker.as_deref()
+        self.tracker.as_deref()
     }
 
-    /// Returns a child handle whose request context also holds `value`.
+    /// Creates a child context containing `value`.
     ///
-    /// The child inherits other context values and shares the request's state.
-    /// If this type is already registered, the child sees `value` while the
-    /// parent still sees the original.
+    /// In the child, `value` replaces any earlier value of the same type.
+    /// Other values and the request state are shared with the parent.
+    /// The parent's values stay unchanged.
     #[must_use]
     pub fn with<T>(&self, value: T) -> Cx
     where
         T: Any + Send + Sync,
     {
-        let mut request_context = (*self.state.request_context).clone();
-        request_context.insert(value);
-        self.scope(request_context)
+        let mut values = self.scope.values.clone();
+        values.insert(value);
+        self.derive(values)
     }
 
-    /// Returns a child handle whose request context also holds every value in
-    /// `values`, a tuple of context values or a [`RequestContext`].
+    /// Creates a child context with all the supplied values.
     ///
-    /// Behaves like chained [`with`](Self::with) calls, but builds the child's
-    /// request context in one step.
+    /// Pass a tuple or a [`ContextMap`]. This has the same result as calling
+    /// [`with`](Self::with) for each value, but creates the child in one step.
     #[must_use]
     pub fn with_many<V>(&self, values: V) -> Cx
     where
         V: ContextValues,
     {
-        let mut request_context = (*self.state.request_context).clone();
-        values.install(&mut request_context);
-        self.scope(request_context)
+        let mut derived = self.scope.values.clone();
+        values.install(&mut derived);
+        self.derive(derived)
     }
 
-    /// Wraps a derived request context into a child handle sharing this
-    /// request's state.
-    fn scope(&self, request_context: RequestContext) -> Cx {
+    /// Creates a child with `values`, keeping the same request state and
+    /// sealed layers.
+    fn derive(&self, values: ContextMap) -> Cx {
         Cx {
-            state: Arc::new(CxState {
-                shared: Arc::clone(&self.state.shared),
-                request_context: Arc::new(request_context),
-                tracker: self.state.tracker.clone(),
+            scope: Arc::new(Scope {
+                request: Arc::clone(&self.scope.request),
+                values,
+                sealed: self.scope.sealed.clone(),
             }),
+            tracker: self.tracker.clone(),
             identity: self.identity,
         }
     }
 
-    /// Returns a child handle whose request context reads are recorded, along
-    /// with the tracker collecting them.
+    /// Creates a handle with read tracking and returns its tracker too.
     ///
-    /// The child shares this handle's scope, and that scope is also the
-    /// tracker's entry scope. A tracker inherited from an enclosing `track`
-    /// call is replaced, not stacked: reads made through the child and its
-    /// descendants are recorded by the new tracker only.
+    /// The handle uses the same scope. The tracker saves that scope as the
+    /// starting point for checking dependencies. Reads through the new
+    /// handle or its children go only to this tracker, even if the parent
+    /// already had one.
     pub(crate) fn track(&self) -> (Cx, Arc<ContextTracker>) {
-        let tracker = Arc::new(ContextTracker::new(Arc::clone(&self.state.request_context)));
+        let tracker = Arc::new(ContextTracker::new(Arc::clone(&self.scope)));
         let child = Cx {
-            state: Arc::new(CxState {
-                shared: Arc::clone(&self.state.shared),
-                request_context: Arc::clone(&self.state.request_context),
-                tracker: Some(Arc::clone(&tracker)),
-            }),
+            scope: Arc::clone(&self.scope),
+            tracker: Some(Arc::clone(&tracker)),
             identity: self.identity,
         };
         (child, tracker)
     }
 }
 
-/// The bindings and tracker shared by handles in one context scope.
+/// The values and request state used by a context handle.
+///
+/// [`Cx::with`] copies the `values` map when creating a child. Values shared
+/// across requests live in sealed layers, which the child shares without
+/// copying their maps.
 #[derive(Debug, Default)]
-struct CxState {
-    shared: Arc<RequestShared>,
-    request_context: Arc<RequestContext>,
-    tracker: Option<Arc<ContextTracker>>,
+pub(crate) struct Scope {
+    /// State shared by all scopes of this request.
+    request: Arc<RequestState>,
+    /// Values added while handling the request.
+    values: ContextMap,
+    /// The first sealed layer to search, with links to the older layers.
+    sealed: Option<Arc<Sealed>>,
 }
 
-/// The state shared by every handle to one request's [`Cx`].
+impl Scope {
+    /// Finds `T` and returns its binding ID and a reference to its value.
+    /// Returns `None` if the scope has no value of that type.
+    ///
+    /// Search request values first, then sealed layers from newest to oldest.
+    pub(crate) fn lookup<T>(&self) -> Option<(BindingId, &T)>
+    where
+        T: Any + Send + Sync,
+    {
+        self.values
+            .lookup::<T>()
+            .or_else(|| self.sealed().find_map(ContextMap::lookup::<T>))
+    }
+
+    /// Finds the binding ID for `type_id`, or returns `None` if it is absent.
+    ///
+    /// Uses the same search order as [`lookup`](Self::lookup). Accepting a
+    /// [`TypeId`] lets tracking check a saved read without a type parameter.
+    pub(crate) fn binding_id(&self, type_id: TypeId) -> Option<BindingId> {
+        self.values
+            .binding_id(type_id)
+            .or_else(|| self.sealed().find_map(|values| values.binding_id(type_id)))
+    }
+
+    /// Visits the sealed maps from newest to oldest.
+    fn sealed(&self) -> impl Iterator<Item = &ContextMap> {
+        iter::successors(self.sealed.as_deref(), |layer| layer.parent.as_deref())
+            .map(|layer| &*layer.values)
+    }
+}
+
+/// A link to a map of values shared across requests.
+///
+/// Each request owns its link to the shared map. Creating a child scope
+/// updates the reference count of that link without touching the shared
+/// map's reference count.
+#[derive(Debug)]
+struct Sealed {
+    /// The map this layer reads from.
+    values: Arc<ContextMap>,
+    /// The next layer to search if this one lacks a type.
+    parent: Option<Arc<Sealed>>,
+}
+
+/// State kept for one request and shared by all its [`Cx`] handles.
 #[derive(Debug, Default)]
-struct RequestShared {
+struct RequestState {
     id: CxId,
-    app_context: Arc<AppContext>,
     memoize_cache: MemoizeCache,
     abort_store: AbortStore,
-}
-
-/// Builds a [`Cx`] with app and request context values for a test.
-///
-/// Use this when a test needs context without handling an HTTP request.
-#[derive(Debug, Default)]
-pub struct CxTestBuilder {
-    app_context: AppContext,
-    request_context: RequestContext,
-}
-
-impl CxTestBuilder {
-    /// Creates an empty builder.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Registers `value` on the app context.
-    #[must_use]
-    pub fn app_context<T>(mut self, value: T) -> Self
-    where
-        T: Any + Send + Sync,
-    {
-        self.app_context.insert(value);
-        self
-    }
-
-    /// Registers `value` on the request context.
-    #[must_use]
-    pub fn request_context<T>(mut self, value: T) -> Self
-    where
-        T: Any + Send + Sync,
-    {
-        self.request_context.insert(value);
-        self
-    }
-
-    /// Consumes the builder, returning the assembled [`Cx`].
-    #[must_use]
-    pub fn build(self) -> Cx {
-        Cx::from_parts(Arc::new(self.app_context), self.request_context)
-    }
 }
 
 /// Returns the identity of this context's scope.
@@ -262,7 +272,7 @@ pub fn identity(cx: &Cx) -> Identity {
 #[track_caller]
 pub fn try_identity(cx: &Cx) -> Result<Identity, AmbiguousIdentityError> {
     assert!(
-        cx.state.tracker.is_none(),
+        cx.tracker.is_none(),
         "identity cannot be read inside memoized functions"
     );
     cx.identity.checked()
@@ -286,14 +296,14 @@ pub fn with_identity(cx: Cx, identity: Identity) -> Cx {
 #[must_use]
 #[doc(hidden)]
 pub fn memoize_cache(cx: &Cx) -> &MemoizeCache {
-    &cx.state.shared.memoize_cache
+    &cx.scope.request.memoize_cache
 }
 
 #[inline]
 #[must_use]
 #[doc(hidden)]
 pub fn abort_store(cx: &Cx) -> &AbortStore {
-    &cx.state.shared.abort_store
+    &cx.scope.request.abort_store
 }
 
 #[cfg(test)]
@@ -306,10 +316,17 @@ mod tests {
     #[derive(Debug, PartialEq)]
     struct Other(&'static str);
 
+    /// Creates a context with `value` in its shared map.
+    fn shared<T: Any + Send + Sync>(value: T) -> Cx {
+        let mut values = ContextMap::new();
+        values.insert(value);
+        Cx::new(Arc::new(values))
+    }
+
     #[test]
     fn a_fresh_context_has_a_unique_id() {
-        let first = Cx::new(Arc::new(AppContext::new()));
-        let second = Cx::new(Arc::new(AppContext::new()));
+        let first = Cx::new(Arc::new(ContextMap::new()));
+        let second = Cx::new(Arc::new(ContextMap::new()));
         assert_ne!(first.id(), second.id());
     }
 
@@ -337,12 +354,12 @@ mod tests {
     fn keyed_contexts_share_request_state_and_preserve_their_scope() {
         let cx = Cx::default().with(Marker(7));
         let child = cx.keyed("child");
-        assert!(Arc::ptr_eq(&child.state, &cx.state));
+        assert!(Arc::ptr_eq(&child.scope, &cx.scope));
         assert_eq!(child.id(), cx.id());
         assert!(std::ptr::eq(memoize_cache(&child), memoize_cache(&cx)));
         assert!(std::ptr::eq(
-            request_context::<Marker>(&child),
-            request_context::<Marker>(&cx)
+            context::<Marker>(&child),
+            context::<Marker>(&cx)
         ));
 
         let expected = identity(&child);
@@ -385,8 +402,8 @@ mod tests {
         let cx = Cx::default();
         let child = cx.with(Marker(1));
 
-        assert_eq!(try_request_context::<Marker>(&cx), None);
-        assert_eq!(request_context::<Marker>(&child), &Marker(1));
+        assert_eq!(try_context::<Marker>(&cx), None);
+        assert_eq!(context::<Marker>(&child), &Marker(1));
     }
 
     #[test]
@@ -394,29 +411,26 @@ mod tests {
         let cx = Cx::default().with(Marker(1));
         let child = cx.with(Marker(2));
 
-        assert_eq!(request_context::<Marker>(&cx), &Marker(1));
-        assert_eq!(request_context::<Marker>(&child), &Marker(2));
+        assert_eq!(context::<Marker>(&cx), &Marker(1));
+        assert_eq!(context::<Marker>(&child), &Marker(2));
     }
 
     #[test]
     fn a_child_inherits_the_parent_context() {
-        let cx = CxTestBuilder::new()
-            .app_context(Other("app"))
-            .request_context(Marker(7))
-            .build();
-        let child = cx.with(Other("request"));
+        let cx = shared(Other("router")).with(Marker(7));
+        let child = cx.with(Other("scoped"));
 
-        assert_eq!(request_context::<Marker>(&child), &Marker(7));
-        assert_eq!(request_context::<Other>(&child), &Other("request"));
-        assert_eq!(app_context::<Other>(&child), &Other("app"));
+        assert_eq!(context::<Marker>(&child), &Marker(7));
+        assert_eq!(context::<Other>(&child), &Other("scoped"));
+        assert_eq!(context::<Other>(&cx), &Other("router"));
     }
 
     #[test]
     fn with_many_registers_every_value() {
         let cx = Cx::default().with_many((Marker(1), Other("many")));
 
-        assert_eq!(request_context::<Marker>(&cx), &Marker(1));
-        assert_eq!(request_context::<Other>(&cx), &Other("many"));
+        assert_eq!(context::<Marker>(&cx), &Marker(1));
+        assert_eq!(context::<Other>(&cx), &Other("many"));
     }
 
     #[test]
@@ -431,13 +445,59 @@ mod tests {
 
     #[test]
     fn clones_outlive_the_original() {
-        let cx = CxTestBuilder::new().request_context(Marker(7)).build();
+        let cx = Cx::default().with(Marker(7));
         let id = cx.id();
         let handle = cx.clone();
         drop(cx);
 
-        assert_eq!(request_context::<Marker>(&handle).0, 7);
+        assert_eq!(context::<Marker>(&handle).0, 7);
         assert_eq!(handle.id(), id);
+    }
+
+    #[test]
+    fn with_shares_sealed_values_instead_of_copying_them() {
+        let cx = shared(Other("router"));
+        let child = cx.with(Marker(1)).with_many((Marker(2),));
+
+        assert!(std::ptr::eq(
+            context::<Other>(&child),
+            context::<Other>(&cx)
+        ));
+    }
+
+    #[test]
+    fn reads_of_sealed_values_are_tracked() {
+        let cx = shared(Other("router"));
+        let (child, tracker) = cx.track();
+
+        let _ = context::<Other>(&child);
+
+        let reads = tracker.take_reads();
+        assert_eq!(reads.len(), 1);
+        assert!(reads[0].matches(cx.scope()));
+        assert!(!reads[0].matches(cx.with(Other("scoped")).scope()));
+    }
+
+    #[test]
+    fn track_shares_the_scope() {
+        let cx = Cx::default().with(Marker(1));
+        let (child, _tracker) = cx.track();
+
+        assert!(Arc::ptr_eq(&child.scope, &cx.scope));
+        assert!(cx.tracker.is_none());
+        assert!(child.tracker.is_some());
+    }
+
+    #[test]
+    fn derived_handles_keep_the_tracker() {
+        let cx = Cx::default();
+        let (child, tracker) = cx.track();
+        let derived = child.with(Marker(1)).keyed(());
+
+        assert!(Arc::ptr_eq(
+            derived.tracker.as_ref().expect("tracker is kept"),
+            &tracker
+        ));
     }
 
     #[test]

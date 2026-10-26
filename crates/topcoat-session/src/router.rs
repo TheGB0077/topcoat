@@ -29,8 +29,7 @@ impl Layer for SessionLayer {
 
 /// Installs session support on a [`RouterBuilder`].
 pub trait RouterBuilderSessionExt {
-    /// Registers the session `config` on the app context and the root session
-    /// layer.
+    /// Shares `config` with requests and adds the root session layer.
     ///
     /// The default cookie token store also needs the cookie layer, registered
     /// with the cookie crate's `cookies` extension method.
@@ -40,7 +39,7 @@ pub trait RouterBuilderSessionExt {
 
 impl RouterBuilderSessionExt for RouterBuilder {
     fn sessions(mut self, config: SessionConfig) -> Self {
-        self = self.app_context(config);
+        self = self.with(config);
         self = self.layer(SessionLayer::new());
         self
     }
