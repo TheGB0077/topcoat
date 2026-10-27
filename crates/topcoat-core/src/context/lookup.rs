@@ -4,11 +4,11 @@ use std::any::{Any, type_name};
 
 use crate::context::{ContextRead, Cx};
 
-/// Borrows the value of type `T` in `cx`, or returns `None` if it is absent.
+/// Borrows the closest value of type `T` in `cx`, or returns `None` if there
+/// is none.
 ///
-/// Ask for the exact type that was registered. A value added with
-/// [`Cx::with`] overrides an earlier value of that type, including a router
-/// default. Only the child context sees the replacement.
+/// Ask for the exact type that was added. A value added with [`Cx::with`]
+/// shadows the earlier values of its type, so this returns the newest one.
 ///
 /// # Examples
 ///
@@ -33,11 +33,10 @@ where
     binding.map(|(_, value)| value)
 }
 
-/// Borrows the value of type `T` in `cx`.
+/// Borrows the closest value of type `T` in `cx`.
 ///
-/// Use the same type that was registered. Values added with [`Cx::with`]
-/// take priority over earlier values of that type in the child context.
-/// The parent still reads its original value.
+/// Ask for the exact type that was added. A value added with [`Cx::with`]
+/// shadows the earlier values of its type, so this returns the newest one.
 ///
 /// # Panics
 ///
@@ -74,12 +73,41 @@ where
     }
 }
 
+/// Visits every value of type `T` in `cx`, from the closest to the oldest.
+///
+/// Adding a value with [`Cx::with`] shadows the earlier values of its type
+/// but keeps them. [`context`] returns only the closest value. This
+/// function starts at that value and walks back through every value it
+/// shadows, in the reverse of the order they were added.
+///
+/// # Examples
+///
+/// ```rust
+/// use topcoat::context::{Cx, iter_context};
+///
+/// struct Crumb(&'static str);
+///
+/// let cx = Cx::default().with(Crumb("Home")).with(Crumb("Posts"));
+/// let crumbs: Vec<_> = iter_context::<Crumb>(&cx).map(|crumb| crumb.0).collect();
+///
+/// assert_eq!(crumbs, ["Posts", "Home"]);
+/// ```
+pub fn iter_context<T>(cx: &Cx) -> impl Iterator<Item = &T>
+where
+    T: Any + Send + Sync,
+{
+    if let Some(tracker) = &cx.tracker {
+        tracker.record(ContextRead::all::<T>(&cx.scope));
+    }
+    cx.scope.iter::<T>()
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::context::ContextMap;
+    use crate::context::{ContextMap, memoize_cache};
 
     #[derive(Debug, PartialEq)]
     struct Database(&'static str);
@@ -104,5 +132,46 @@ mod tests {
     fn context_panics_for_unregistered_type() {
         let cx = Cx::default();
         let _: &Database = context(&cx);
+    }
+
+    #[test]
+    fn iter_context_visits_request_values_before_sealed_values() {
+        let mut shared = ContextMap::new();
+        shared.insert(Database("primary"));
+        let cx = Cx::new(Arc::new(shared))
+            .with(Database("replica"))
+            .with(Database("cache"));
+
+        assert_eq!(
+            iter_context::<Database>(&cx).collect::<Vec<_>>(),
+            [
+                &Database("cache"),
+                &Database("replica"),
+                &Database("primary")
+            ]
+        );
+    }
+
+    #[test]
+    fn memoized_iterations_rerun_when_a_value_is_added() {
+        let count = |cx: Cx, (): ()| iter_context::<Database>(&cx).count();
+
+        let cx = Cx::default().with(Database("primary"));
+        let child = cx.with(Database("replica"));
+
+        assert_eq!(*memoize_cache(&cx).memoize(&cx, (), (), count), 1);
+        assert_eq!(*memoize_cache(&child).memoize(&child, (), (), count), 2);
+        assert_eq!(*memoize_cache(&cx).memoize(&cx, (), (), count), 1);
+    }
+
+    #[test]
+    fn memoized_iterations_through_own_values_depend_on_the_caller() {
+        let count = |cx: Cx, (): ()| iter_context::<Database>(&cx.with(Database("own"))).count();
+
+        let cx = Cx::default().with(Database("primary"));
+        let child = cx.with(Database("replica"));
+
+        assert_eq!(*memoize_cache(&cx).memoize(&cx, (), (), count), 2);
+        assert_eq!(*memoize_cache(&child).memoize(&child, (), (), count), 3);
     }
 }
