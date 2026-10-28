@@ -8,7 +8,6 @@ use clap::{Args, Subcommand};
 /// The name of the directory under a crate's manifest directory that holds
 /// its asset bundle.
 const DIST_SUBDIR: &str = "dist";
-const OUT_SUBDIR: &str = "assets";
 /// The scope of the asset download cache inside the shared Topcoat cache.
 const CACHE_SCOPE: &str = "assets";
 

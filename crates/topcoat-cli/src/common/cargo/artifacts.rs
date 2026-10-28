@@ -5,20 +5,27 @@ use std::{
 
 use serde::Deserialize;
 
+use super::build::BuiltTarget;
+
 /// A Cargo artifact message describing a compiled target and its output files.
 #[derive(Deserialize)]
 pub(super) struct Artifact {
+    package_id: Option<String>,
     target: Target,
     executable: Option<PathBuf>,
     filenames: Vec<PathBuf>,
 }
 
 impl Artifact {
-    /// Returns the target's final executable or dynamic libraries. Skips intermediate
-    /// dependencies and build-script outputs.
-    pub(super) fn final_outputs(&self) -> Vec<PathBuf> {
+    /// Returns the target's final executable or dynamic libraries as built
+    /// targets. Skips intermediate dependencies and build-script outputs.
+    pub(super) fn built_targets(&self) -> Vec<BuiltTarget> {
+        let package = self.package_name().map(str::to_owned);
         if let Some(executable) = &self.executable {
-            return vec![executable.clone()];
+            return vec![BuiltTarget {
+                path: executable.clone(),
+                package: package.clone(),
+            }];
         }
         if !self.is_dynamic_library() {
             return Vec::new();
@@ -26,8 +33,19 @@ impl Artifact {
         self.filenames
             .iter()
             .filter(|filename| is_final_library(filename))
-            .cloned()
+            .map(|path| BuiltTarget {
+                path: path.clone(),
+                package: package.clone(),
+            })
             .collect()
+    }
+
+    /// The name of the package this artifact was built for, from the
+    /// `package_id` fragment Cargo reports.
+    fn package_name(&self) -> Option<&str> {
+        let id = self.package_id.as_deref()?;
+        let (_, name) = id.split_once('#')?;
+        name.split_once('@').map(|(name, _)| name)
     }
 
     /// Whether the target produces a `cdylib` or `dylib`. Proc-macro libraries are
@@ -69,6 +87,8 @@ fn is_final_library(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use serde_json::json;
 
     use super::*;
@@ -82,15 +102,38 @@ mod tests {
         .unwrap()
     }
 
+    fn outputs(artifact: Artifact) -> Vec<PathBuf> {
+        artifact
+            .built_targets()
+            .into_iter()
+            .map(|target| target.path)
+            .collect()
+    }
+
     #[test]
     fn cdylib_output_is_picked_over_its_rlib_companion() {
-        let artifact = artifact(
-            &["cdylib", "rlib"],
-            &["/target/wasm/app.wasm", "/target/wasm/libapp.rlib"],
-        );
         assert_eq!(
-            artifact.final_outputs(),
+            outputs(artifact(
+                &["cdylib", "rlib"],
+                &["/target/wasm/app.wasm", "/target/wasm/libapp.rlib"],
+            )),
             vec![PathBuf::from("/target/wasm/app.wasm")]
+        );
+    }
+
+    #[test]
+    fn artifacts_report_their_owning_package() {
+        let artifact: Artifact = serde_json::from_value(json!({
+            "package_id": "path+file:///w/apps#web@0.1.0",
+            "target": { "crate_types": ["bin"] },
+            "executable": "/target/debug/web",
+            "filenames": ["/target/debug/web"],
+        }))
+        .unwrap();
+
+        assert_eq!(
+            artifact.built_targets().pop().unwrap().package.as_deref(),
+            Some("web")
         );
     }
 
@@ -99,22 +142,25 @@ mod tests {
         // A dependency that declares `cdylib` produces a scannable output
         // too, but cargo leaves it in `deps/`; only the uplifted output of
         // the crate being built belongs in the bundle.
-        let artifact = artifact(&["cdylib", "rlib"], &["/target/deps/libdep.dylib"]);
-        assert_eq!(artifact.final_outputs(), Vec::<PathBuf>::new());
+        assert!(
+            outputs(artifact(
+                &["cdylib", "rlib"],
+                &["/target/deps/libdep.dylib"]
+            ))
+            .is_empty()
+        );
     }
 
     #[test]
     fn proc_macro_libraries_are_not_scanned() {
         // A workspace build uplifts the proc-macro members' shared objects
         // right next to the application's output.
-        let artifact = artifact(&["proc-macro"], &["/target/libmacros.dylib"]);
-        assert_eq!(artifact.final_outputs(), Vec::<PathBuf>::new());
+        assert!(outputs(artifact(&["proc-macro"], &["/target/libmacros.dylib"])).is_empty());
     }
 
     #[test]
     fn plain_library_dependencies_are_not_scanned() {
-        let artifact = artifact(&["lib"], &["/target/deps/libdep.rlib"]);
-        assert_eq!(artifact.final_outputs(), Vec::<PathBuf>::new());
+        assert!(outputs(artifact(&["lib"], &["/target/deps/libdep.rlib"])).is_empty());
     }
 
     #[test]
