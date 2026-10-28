@@ -29,6 +29,7 @@ impl BuildKind {
 /// The executable and asset bundle produced by a successful build.
 pub struct BuildOutput {
     pub exe: PathBuf,
+    pub assets: PathBuf,
     pub stamp: Option<BuildStamp>,
 }
 
@@ -142,6 +143,7 @@ async fn build(kind: BuildKind, opts: BuildOpts) -> Option<BuildOutput> {
 
     Some(BuildOutput {
         stamp: BuildStamp::of(&exe, &assets),
+        assets: assets.clone(),
         exe,
     })
 }
