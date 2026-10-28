@@ -98,9 +98,9 @@ impl BuildConfig {
                     env::var_os("CARGO_MANIFEST_DIR").ok_or(BuildError::NoManifestDir)?;
                 Some(PathBuf::from(manifest_dir).join(cache_dir))
             }
-            // An `OUT_DIR` outside Cargo's layout has no shared cache; fall
-            // back to caching inside the stage directory itself.
-            None => topcoat_core::cache::cache_dir("iconify"),
+            // Without a home directory there is no shared cache; fall back
+            // to caching inside the stage directory itself.
+            None => topcoat_core::cache::user_cache_dir("iconify"),
         };
 
         for set in self.sets {
