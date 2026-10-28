@@ -104,7 +104,7 @@ const TRASH: IconData = iconify::iconify_icon!("feather:trash-2");
 
 ## Caching and vendoring
 
-By default the downloaded sets are cached in Topcoat's cache inside the Cargo target directory, shared across the workspace. Pass [`cache_dir`] to keep the cache in a directory of your own instead:
+By default the downloaded sets are cached in the user-level Topcoat cache (`topcoat/iconify` under the platform cache directory), shared across projects. Pass [`cache_dir`] to keep the cache in a directory of your own instead:
 
 ```rust,no_run
 # #[cfg(feature = "icon-iconify")]
@@ -121,7 +121,7 @@ fn main() {
 # fn main() {}
 ```
 
-Each set is cached at `<dir>/<set>.json` and downloaded only when its file is missing or pinned to a different version. Commit the directory for offline, reproducible builds, or gitignore it to keep a cache that survives `cargo clean`. Files you place there yourself are used as-is, so an icon set that is not on Iconify can be vendored the same way.
+Each set is cached at `<dir>/<set>/<version>.json` (unpinned sets under `latest`) and downloaded only when its file is missing. Concurrent builds never see a partially written file, and different versions of a set stay cached side by side. Commit the directory for offline, reproducible builds, or gitignore it to keep a cache that survives `cargo clean`. Files you place there yourself are used as-is, so an icon set that is not on Iconify can be vendored the same way.
 
 [Iconify]: https://iconify.design/
 [`IconData`]: IconData

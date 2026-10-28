@@ -1,7 +1,7 @@
 use std::{
     env,
     fmt::Display,
-    fs, io,
+    fs,
     io::Read as _,
     path::{Path, PathBuf},
 };
@@ -48,8 +48,8 @@ impl BuildConfig {
         self
     }
 
-    /// Stages `version` of `set`. Downloads it if the cached version differs.
-    /// A `<set>.version` file beside the cached set records its version.
+    /// Stages `version` of `set`. Downloads it if the cache has no copy of
+    /// that version yet.
     #[must_use]
     pub fn icon_set_version(mut self, set: impl Into<String>, version: impl Into<String>) -> Self {
         self.sets.push(Set {
@@ -60,15 +60,14 @@ impl BuildConfig {
     }
 
     /// Caches downloaded sets in `dir` instead of the shared Topcoat cache
-    /// in the target directory. Relative paths resolve against
+    /// under the user's cache directory. Relative paths resolve against
     /// `CARGO_MANIFEST_DIR` (the package root).
     ///
-    /// Each set is cached at `<dir>/<set>.json` and downloaded only when
-    /// its file is missing or, for an
-    /// [`icon_set_version`](Self::icon_set_version) set, cached from a
-    /// different version. Files you place there yourself are used as-is.
-    /// Commit the directory for offline, reproducible builds, or gitignore
-    /// it to keep a cache that survives `cargo clean`.
+    /// Each set is cached at `<dir>/<set>/<version>.json`, with unpinned
+    /// sets under `latest`, and downloaded only when its file is missing.
+    /// Files you place there yourself are used as-is. Commit the directory
+    /// for offline, reproducible builds, or gitignore it to keep a cache
+    /// that survives `cargo clean`.
     #[must_use]
     pub fn cache_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.cache_dir = Some(dir.into());
@@ -98,18 +97,22 @@ impl BuildConfig {
                     env::var_os("CARGO_MANIFEST_DIR").ok_or(BuildError::NoManifestDir)?;
                 Some(PathBuf::from(manifest_dir).join(cache_dir))
             }
-            // Without a home directory there is no shared cache; fall back
-            // to caching inside the stage directory itself.
+            // Without a home directory there is no shared cache; cache inside
+            // the stage directory's own `cache` folder instead.
             None => topcoat_core::cache::user_cache_dir("iconify"),
         };
+        let cache_dir = cache_dir.unwrap_or_else(|| dir.join("cache"));
 
         for set in self.sets {
-            set.stage(&dir, cache_dir.as_deref())?;
+            set.stage(&dir, &cache_dir)?;
         }
 
         Ok(())
     }
 }
+
+/// The cache key unpinned sets are staged under.
+const LATEST: &str = "latest";
 
 /// One icon set to stage: the name of its `@iconify-json/<name>` package and
 /// an optionally pinned version.
@@ -121,60 +124,31 @@ struct Set {
 
 impl Set {
     /// Stages this set into `dir`, downloading it through the cache at
-    /// `cache_dir`, or through `dir` itself when no cache directory is
-    /// configured.
+    /// `cache_dir` when the cache has no copy of the requested version yet.
     ///
-    /// Reuses the cached copy unless a different version is requested.
-    /// Unpinned sets are not checked for updates.
-    fn stage(self, dir: &Path, cache_dir: Option<&Path>) -> Result {
-        let cache = cache_dir.unwrap_or(dir);
-        let cached = cache.join(format!("{}.json", self.name));
-        let sidecar = cache.join(format!("{}.version", self.name));
+    /// The cache keeps one file per version at `<cache>/<set>/<version>.json`,
+    /// with unpinned sets under [`LATEST`], so concurrent builds publish
+    /// different versions independently and every file appears complete.
+    fn stage(self, dir: &Path, cache_dir: &Path) -> Result {
+        let version = self.version.as_deref().unwrap_or(LATEST);
+        let cached = cache_dir.join(&self.name).join(format!("{version}.json"));
 
-        let fresh = cached.exists()
-            && match &self.version {
-                Some(version) => {
-                    fs::read_to_string(&sidecar).ok().as_deref() == Some(version.as_str())
-                }
-                None => true,
-            };
-
-        if !fresh {
+        if !cached.exists() {
             let bytes = self.fetch()?;
-            fs::create_dir_all(cache).map_err(|source| BuildError::Io {
-                path: cache.to_path_buf(),
+            let set_dir = cached.parent().expect("cached path has a parent");
+            fs::create_dir_all(set_dir).map_err(|source| BuildError::Io {
+                path: set_dir.to_path_buf(),
                 source,
             })?;
-            write(&cached, &bytes)?;
-            match &self.version {
-                Some(version) => write(&sidecar, version.as_bytes())?,
-                // Drop a sidecar left over from a previously pinned
-                // download; the cached copy no longer matches it.
-                None => match fs::remove_file(&sidecar) {
-                    Err(source) if source.kind() != io::ErrorKind::NotFound => {
-                        return Err(BuildError::Io {
-                            path: sidecar,
-                            source,
-                        });
-                    }
-                    _ => {}
-                },
-            }
+            publish(&cached, &bytes)?;
         }
 
-        // A separate cache directory is user-managed: check its file and
-        // copy it into the stage directory. The stage directory itself is
-        // not edited by hand, so its files are staged as they are.
-        if cache_dir.is_some() {
-            let bytes = fs::read(&cached).map_err(|source| BuildError::Io {
-                path: cached.clone(),
-                source,
-            })?;
-            self.check_prefix(&parse(&bytes, cached.display())?)?;
-            write(&dir.join(format!("{}.json", self.name)), &bytes)?;
-        }
-
-        Ok(())
+        let bytes = fs::read(&cached).map_err(|source| BuildError::Io {
+            path: cached.clone(),
+            source,
+        })?;
+        self.check_prefix(&parse(&bytes, cached.display())?)?;
+        publish(&dir.join(format!("{}.json", self.name)), &bytes)
     }
 
     /// Fetches this set from jsDelivr, at the pinned version or the `latest`
@@ -253,12 +227,29 @@ fn parse(bytes: &[u8], origin: impl Display) -> Result<IconSet> {
     Ok(set)
 }
 
-/// Writes `bytes` to `path`, wrapping errors with the path.
-fn write(path: &Path, bytes: &[u8]) -> Result {
-    fs::write(path, bytes).map_err(|source| BuildError::Io {
-        path: path.to_path_buf(),
+/// Publishes `bytes` at `path` atomically: writes a temporary file next to
+/// it and renames it into place, so concurrent readers never see a partial
+/// file and concurrent writers of the same version never interleave.
+fn publish(path: &Path, bytes: &[u8]) -> Result {
+    let file = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let temp = path.with_file_name(format!("{file}.tmp-{}", std::process::id()));
+
+    fs::write(&temp, bytes).map_err(|source| BuildError::Io {
+        path: temp.clone(),
         source,
-    })
+    })?;
+    if let Err(source) = fs::rename(&temp, path) {
+        let _ = fs::remove_file(&temp);
+        return Err(BuildError::Io {
+            path: path.to_path_buf(),
+            source,
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -281,6 +272,7 @@ mod tests {
     }
 
     const DEMO: &[u8] = br#"{ "prefix": "demo", "icons": { "trash": { "body": "<g/>" } } }"#;
+    const DEMO_TWO: &[u8] = br#"{ "prefix": "demo", "icons": { "bin": { "body": "<g/>" } } }"#;
 
     #[test]
     fn cached_files_stage_offline() {
@@ -291,10 +283,9 @@ mod tests {
         fs::create_dir_all(&stage_dir).unwrap();
 
         // A fetch of the nonexistent `demo` package would fail.
-        fs::write(cache_dir.join("demo.json"), DEMO).unwrap();
-        set("demo", None)
-            .stage(&stage_dir, Some(&cache_dir))
-            .unwrap();
+        fs::create_dir_all(cache_dir.join("demo")).unwrap();
+        fs::write(cache_dir.join("demo").join("latest.json"), DEMO).unwrap();
+        set("demo", None).stage(&stage_dir, &cache_dir).unwrap();
 
         assert_eq!(fs::read(stage_dir.join("demo.json")).unwrap(), DEMO);
     }
@@ -307,23 +298,56 @@ mod tests {
         fs::create_dir_all(&cache_dir).unwrap();
         fs::create_dir_all(&stage_dir).unwrap();
 
-        fs::write(cache_dir.join("demo.json"), DEMO).unwrap();
-        fs::write(cache_dir.join("demo.version"), "9.9.9").unwrap();
+        fs::create_dir_all(cache_dir.join("demo")).unwrap();
+        fs::write(cache_dir.join("demo").join("9.9.9.json"), DEMO).unwrap();
         set("demo", Some("9.9.9"))
-            .stage(&stage_dir, Some(&cache_dir))
+            .stage(&stage_dir, &cache_dir)
             .unwrap();
 
         assert_eq!(fs::read(stage_dir.join("demo.json")).unwrap(), DEMO);
     }
 
     #[test]
+    fn pinned_versions_are_cached_independently() {
+        let root = temp_dir("pinned-versions-independent");
+        let cache_dir = root.join("icons");
+        let stage_dir = root.join("staged");
+        fs::create_dir_all(&cache_dir).unwrap();
+        fs::create_dir_all(&stage_dir).unwrap();
+
+        fs::create_dir_all(cache_dir.join("demo")).unwrap();
+        fs::write(cache_dir.join("demo").join("1.0.0.json"), DEMO).unwrap();
+        fs::write(cache_dir.join("demo").join("2.0.0.json"), DEMO_TWO).unwrap();
+
+        set("demo", Some("1.0.0"))
+            .stage(&stage_dir, &cache_dir)
+            .unwrap();
+        assert_eq!(fs::read(stage_dir.join("demo.json")).unwrap(), DEMO);
+
+        set("demo", Some("2.0.0"))
+            .stage(&stage_dir, &cache_dir)
+            .unwrap();
+        assert_eq!(fs::read(stage_dir.join("demo.json")).unwrap(), DEMO_TWO);
+
+        // Both versions stay cached; staging one does not evict the other.
+        assert!(cache_dir.join("demo").join("1.0.0.json").is_file());
+        assert!(cache_dir.join("demo").join("2.0.0.json").is_file());
+    }
+
+    #[test]
     fn the_build_dir_cache_reuses_files_as_they_are() {
         let root = temp_dir("build-dir-reuse");
         let stage_dir = root.join("staged");
-        fs::create_dir_all(&stage_dir).unwrap();
+        fs::create_dir_all(stage_dir.join("cache").join("demo")).unwrap();
 
-        fs::write(stage_dir.join("demo.json"), DEMO).unwrap();
-        set("demo", None).stage(&stage_dir, None).unwrap();
+        fs::write(
+            stage_dir.join("cache").join("demo").join("latest.json"),
+            DEMO,
+        )
+        .unwrap();
+        set("demo", None)
+            .stage(&stage_dir, &stage_dir.join("cache"))
+            .unwrap();
 
         assert_eq!(fs::read(stage_dir.join("demo.json")).unwrap(), DEMO);
     }
@@ -337,11 +361,10 @@ mod tests {
         fs::create_dir_all(&stage_dir).unwrap();
 
         let json = br#"{ "prefix": "other", "icons": { "trash": { "body": "<g/>" } } }"#;
-        fs::write(cache_dir.join("demo.json"), json).unwrap();
+        fs::create_dir_all(cache_dir.join("demo")).unwrap();
+        fs::write(cache_dir.join("demo").join("latest.json"), json).unwrap();
 
-        let error = set("demo", None)
-            .stage(&stage_dir, Some(&cache_dir))
-            .unwrap_err();
+        let error = set("demo", None).stage(&stage_dir, &cache_dir).unwrap_err();
         assert!(
             matches!(
                 &error,
