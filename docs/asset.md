@@ -49,7 +49,7 @@ Assets with unused handles may be removed during compilation. Only declarations 
 
 # Loading the bundle
 
-Load the generated asset bundle while building the router, before `.build()`. Use [`AssetBundle::load`] for the default bundle location:
+Load the generated asset bundle while building the router, before `.build()`. Under `topcoat dev`, the dev server bundles to the owning crate's `dist/assets` and starts the application with the `TOPCOAT_ASSETS_PATH` environment variable naming that directory; [`AssetBundle::load`] loads exactly what the server named, so applications developed concurrently in one workspace never share a bundle. Without the variable, [`AssetBundle::load`] looks for the `assets` directory beside the executable, where a deploy ships it. In a source tree it falls back to the `dist/assets` directory of a crate that declares assets in the binary:
 
 ```rust,no_run
 use topcoat::{
@@ -81,25 +81,33 @@ topcoat dev
 cargo topcoat dev
 ```
 
-By default, the bundle is written to an `assets` directory next to the executable it was scanned from:
+The bundle is written to `dist/assets` in the crate that owns the executable, which Cargo reports from the build itself, and the dev server hands that directory to the application it starts through `TOPCOAT_ASSETS_PATH`. Each app's bundle lives in its own crate, so applications developed concurrently in one workspace never overwrite each other's bundle.
+
+The download/cache directory for remote assets is shared between projects:
 
 ```text
-<cargo-target>/<profile>/assets
+<user-cache>/topcoat/assets
 ```
 
-The download/cache directory for remote assets is:
+Where `<user-cache>` is the platform cache directory: `~/.cache` on Linux
+(`XDG_CACHE_HOME` respected), `~/Library/Caches` on macOS, `%LOCALAPPDATA%`
+on Windows.
 
-```text
-<cargo-target>/topcoat/cache/assets
-```
-
-For a manual build, use the asset subcommands:
+To produce the bundle for a deploy, use the asset subcommands:
 
 ```sh
 topcoat asset list
 topcoat asset bundle
 topcoat asset clean
 ```
+
+By default, `topcoat asset bundle` writes to the same `<crate>/dist/assets` directory `topcoat dev` uses:
+
+```text
+<crate>/dist/assets
+```
+
+Ship that directory next to the deployed binary; [`AssetBundle::load`] finds it there.
 
 If Cargo would build more than one executable, choose the target:
 
@@ -108,30 +116,34 @@ topcoat asset bundle --bin my-app
 topcoat asset bundle --package my-package
 ```
 
-The subcommands build the application to scan it, and they accept the same profile flags as `cargo build`. Bundle with the profile you are going to run, since each profile keeps its own bundle:
+The subcommands build the application to scan it, and they accept the same profile flags as `cargo build`. Bundle with the profile you are going to run:
 
 ```sh
 topcoat asset bundle --release
 topcoat asset bundle --profile my-profile
 ```
 
-Do not reuse a bundle from another build, even when the source files are unchanged. Build settings and generated file paths can affect asset identifiers.
+A bundle only fits the build it was bundled from. Running an older binary against a newer bundle fails at render time, so rebuild the bundle and redeploy together. Generated files under `$OUT_DIR` resolve to a different path in every profile, so a binary and the bundle deployed with it must come from the same profile.
+
+Because `dist/assets` is shared across profiles, bundling one profile overwrites the other's bundle. A `topcoat dev` session running the other profile picks the fresh bundle up on its next rebuild.
+
+Running the binary without `topcoat dev` (a plain `cargo run`) loads the `assets` directory beside the executable. When there is none, the asset records in the binary name their declaring crates, and a `dist/assets` bundle next to one of them is loaded; that is how `cargo run` picks up the bundle `topcoat asset bundle` wrote. A deploy always ships the `assets` directory beside the binary, which takes precedence.
 
 To write the bundle somewhere else, pass `--out` and load the same directory at runtime:
 
 ```sh
-topcoat asset bundle --out dist/assets
+topcoat asset bundle --out /srv/my-app/assets
 ```
 
 ```rust,no_run
 # use topcoat::{asset::{AssetBundle, RouterBuilderAssetExt}, router::{RouterBuilderDiscoverExt, module_router}};
 let router = module_router!()
     .discover()
-    .assets(AssetBundle::load_dir("dist/assets").unwrap())
+    .assets(AssetBundle::load_dir("/srv/my-app/assets").unwrap())
     .build();
 ```
 
-[`AssetBundle::load`] only looks next to the executable, so any `--out` outside that location has to be loaded with [`AssetBundle::load_dir`].
+[`AssetBundle::load`] resolves the dev and deploy locations on its own; a bundle written to any other directory has to be loaded with [`AssetBundle::load_dir`].
 
 # Path resolution
 

@@ -9,7 +9,7 @@ pub(super) struct ListArgs {
 }
 
 pub(super) async fn run(args: ListArgs) {
-    let (_, bytes) = BuildOpts::from(args.build)
+    let (_target, bytes) = BuildOpts::from(args.build)
         .build_and_read(|_, _| {})
         .await
         .unwrap_or_else(|e| e.print_and_exit());

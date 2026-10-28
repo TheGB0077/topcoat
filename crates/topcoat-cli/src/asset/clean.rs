@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Args;
 use console::style;
 
-use super::{CACHE_SCOPE, DIST_SUBDIR, OUT_SUBDIR};
+use super::{CACHE_SCOPE, DIST_SUBDIR};
 
 #[derive(Args)]
 pub(super) struct CleanArgs {
@@ -27,7 +27,7 @@ pub(super) async fn run(args: CleanArgs) {
             let mut dirs: Vec<PathBuf> = metadata
                 .local_package_dirs()
                 .into_iter()
-                .map(|dir| dir.join(DIST_SUBDIR).join(OUT_SUBDIR))
+                .map(|dir| dir.join(DIST_SUBDIR).join(topcoat_asset::ASSETS_SUBDIR))
                 .filter(|dir| dir.join(topcoat_asset::MANIFEST_NAME).is_file())
                 .collect();
             dirs.extend(topcoat_core::cache::user_cache_dir(CACHE_SCOPE));

@@ -130,7 +130,7 @@ impl DevCommand {
                             if let Some(old) = server.take() {
                                 old.shutdown().await;
                             }
-                            server = start_app(&output.exe, &dev_url, &events);
+                            server = start_app(&output.exe, &output.assets, &dev_url, &events);
                         }
                     } else {
                         // The failure is already on the terminal; keep the
@@ -186,7 +186,7 @@ async fn rebuild(build: &mut Option<BuildTask>, opts: &BuildOpts, events: &Event
 
 /// Start the built executable, reporting a failure to the terminal and to
 /// connected browsers.
-fn start_app(exe: &Path, dev_url: &str, events: &EventBus) -> Option<AppServer> {
+fn start_app(exe: &Path, assets: &Path, dev_url: &str, events: &EventBus) -> Option<AppServer> {
     let Some(address) = port::resolve() else {
         events.publish(Event::AppExited);
         eprintln!(
@@ -200,7 +200,7 @@ fn start_app(exe: &Path, dev_url: &str, events: &EventBus) -> Option<AppServer> 
         return None;
     };
 
-    match AppServer::spawn(exe, dev_url, &address) {
+    match AppServer::spawn(exe, assets, dev_url, &address) {
         Ok(server) => Some(server),
         Err(error) => {
             events.publish(Event::AppExited);

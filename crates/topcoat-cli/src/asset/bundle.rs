@@ -1,13 +1,11 @@
-use std::{
-    error::Error,
-    path::{Path, PathBuf},
-};
+use std::{error::Error, path::PathBuf};
 
 use clap::Args;
 use console::style;
+use topcoat_asset::ASSETS_SUBDIR;
 
-use super::{CACHE_SCOPE, DIST_SUBDIR, OUT_SUBDIR};
-use crate::common::cargo::{BuildFlags, BuildOpts, Metadata};
+use super::{CACHE_SCOPE, DIST_SUBDIR};
+use crate::common::cargo::{BuildFlags, BuildOpts, BuiltTarget, Metadata};
 
 #[derive(Args)]
 pub(super) struct BundleArgs {
@@ -19,12 +17,12 @@ pub(super) struct BundleArgs {
 }
 
 pub(super) async fn run(args: BundleArgs) {
-    let (exe, bytes) = BuildOpts::from(args.build)
+    let (target, bytes) = BuildOpts::from(args.build)
         .build_and_read(|_, _| {})
         .await
         .unwrap_or_else(|e| e.print_and_exit());
 
-    let out_dir = match run_bundle(&exe, &bytes, args.out).await {
+    let out_dir = match run_bundle(&target, &bytes, args.out).await {
         Ok(path) => path,
         Err(error) => {
             eprintln!(
@@ -40,11 +38,16 @@ pub(super) async fn run(args: BundleArgs) {
 
 /// Bundles assets declared in the executable.
 ///
-/// `bytes` must contain the file at `exe`. Writes the bundle to `out_override`,
-/// or to `<crate>/dist/assets` by default. Fails when the owning crate cannot
-/// be identified; pass `--out` in that case.
+/// `bytes` must contain the file at `target.path`. Writes the bundle to
+/// `out_override`, or to the `dist/assets` directory of the package Cargo
+/// reported building `target` by default. Fails when that package cannot be
+/// identified; pass `--out` in that case.
+///
+/// `topcoat dev` writes the same location and names it to the application it
+/// starts through `TOPCOAT_ASSETS_PATH`; a deploy ships the bundle as the
+/// `assets` directory beside the binary.
 pub(crate) async fn run_bundle(
-    exe: &Path,
+    target: &BuiltTarget,
     bytes: &[u8],
     out_override: Option<PathBuf>,
 ) -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
@@ -54,19 +57,17 @@ pub(crate) async fn run_bundle(
             let metadata = Metadata::workspace()
                 .await
                 .ok_or("could not query cargo metadata")?;
-            let stem = exe
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .ok_or("built executable has no file stem")?;
-            metadata
-                .bin_package_dir(stem)
-                .map(|crate_dir| crate_dir.join(DIST_SUBDIR).join(OUT_SUBDIR))
+            let crate_dir = target
+                .package
+                .as_deref()
+                .and_then(|package| metadata.package_dir(package))
                 .ok_or_else(|| {
                     format!(
                         "could not identify the crate that owns {}; pass --out",
-                        exe.display()
+                        target.path.display()
                     )
-                })?
+                })?;
+            crate_dir.join(DIST_SUBDIR).join(ASSETS_SUBDIR)
         }
     };
     let cache_dir = topcoat_core::cache::user_cache_dir(CACHE_SCOPE)

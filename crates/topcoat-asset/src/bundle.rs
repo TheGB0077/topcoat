@@ -1,13 +1,23 @@
 use std::{
+    collections::HashSet,
+    ffi::OsString,
     fs, io,
     path::{Path, PathBuf},
 };
 
 use crate::{AssetCatalog, AssetId, BundledAsset, MANIFEST_NAME, Manifest, RawAsset};
 
-/// Bundle location for a deployed binary: the `assets` directory beside the
-/// executable.
-const DEPLOY_SUBDIR: &str = "assets";
+/// The name of the directory that holds a bundle: under a crate's `dist`
+/// while it is staged, and beside a deployed executable.
+pub const ASSETS_SUBDIR: &str = "assets";
+
+/// The directory under a crate's manifest directory that holds its bundle in
+/// the source tree.
+const SOURCE_DIST_SUBDIR: &str = "dist";
+
+/// Environment variable through which `topcoat dev` hands the fully
+/// qualified path of the bundle directory to the application it starts.
+const ASSETS_PATH_ENV: &str = "TOPCOAT_ASSETS_PATH";
 
 /// A directory of bundled files and the catalog used to look them up.
 ///
@@ -22,66 +32,83 @@ pub struct AssetBundle {
 impl AssetBundle {
     /// Loads the asset bundle for the running binary.
     ///
-    /// [`asset!`](crate::asset) records the declaring crate's manifest
-    /// directory inside the binary, and `load` resolves that crate's
-    /// `<crate>/dist/assets` bundle from the executable's records. When no
-    /// dist bundle is found, as on a deploy host, the bundle is loaded from
-    /// the deploy location next to the executable; place it there from the
-    /// same build.
+    /// Under `topcoat dev`, the dev server bundles to the owning crate's
+    /// `dist/assets` and starts the application with `TOPCOAT_ASSETS_PATH`
+    /// naming that directory, which [`load`](Self::load) then loads exactly.
+    ///
+    /// Without the variable, the bundle is expected in the [`ASSETS_SUBDIR`]
+    /// directory next to the executable, where the deploy ships it. A binary
+    /// run in its source tree resolves the bundle from its asset records:
+    /// the records name their declaring crates, and `dist/assets` next to
+    /// one of those directories is loaded, which is how a plain `cargo run`
+    /// finds it.
+    ///
+    /// Use [`load_dir`](Self::load_dir) for a custom location.
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::NotFound`] if none of the candidate
-    /// directories contain a bundle manifest. Other errors can occur when
-    /// locating the executable or loading the manifest through
-    /// [`load_dir`](Self::load_dir).
+    /// Returns [`io::ErrorKind::NotFound`] when the resolved location holds
+    /// no bundle manifest. Other errors can occur when locating the
+    /// executable or loading the manifest through [`load_dir`](Self::load_dir).
     pub fn load() -> io::Result<Self> {
-        let exe = std::env::current_exe()?;
-        let dist = Self::dist_dir(&exe);
-        let deploy_dir = exe
-            .parent()
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotFound,
-                    "current executable has no parent directory",
-                )
-            })?
-            .join(DEPLOY_SUBDIR);
-
-        match (dist, deploy_dir.join(MANIFEST_NAME).is_file()) {
-            (Some(dist), _) if dist.join(MANIFEST_NAME).is_file() => Self::load_dir(dist),
-            (_, true) => Self::load_dir(deploy_dir),
-            (dist, false) => Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                match dist {
-                    Some(dist) => format!(
-                        "no asset bundle at {}, {} (run `topcoat asset bundle`)",
-                        dist.display(),
-                        deploy_dir.display()
-                    ),
-                    None => format!(
-                        "no asset bundle at {} (run `topcoat asset bundle`)",
-                        deploy_dir.display()
-                    ),
-                },
-            )),
+        if let Some(dir) = std::env::var_os(ASSETS_PATH_ENV) {
+            return Self::load_env_dir(dir);
         }
+        Self::load_at(&std::env::current_exe()?)
     }
 
-    /// `dist/assets` of the package that owns the executable, found among
-    /// the embedded `asset!` records by the package name matching the
-    /// executable's file stem.
-    fn dist_dir(exe: &Path) -> Option<PathBuf> {
-        let stem = exe.file_stem()?.to_str()?;
-        let bytes = fs::read(exe).ok()?;
-        Self::dist_dir_from(&RawAsset::find_in_binary(&bytes), stem)
+    /// Resolves the directory named through `TOPCOAT_ASSETS_PATH`.
+    fn load_env_dir(dir: OsString) -> io::Result<Self> {
+        let dir = PathBuf::from(dir);
+        if dir.join(MANIFEST_NAME).is_file() {
+            return Self::load_dir(dir);
+        }
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "no asset bundle at {} named by {ASSETS_PATH_ENV} \
+                 (rebuild under `topcoat dev`, or run `topcoat asset bundle`)",
+                dir.display()
+            ),
+        ))
     }
 
-    fn dist_dir_from(records: &[RawAsset], stem: &str) -> Option<PathBuf> {
-        records
-            .iter()
-            .find(|record| record.package_name() == stem)
-            .map(|record| Path::new(record.manifest_dir()).join("dist").join("assets"))
+    /// The resolution behind [`load`](Self::load) for the executable at
+    /// `exe`, as if `TOPCOAT_ASSETS_PATH` were unset.
+    fn load_at(exe: &Path) -> io::Result<Self> {
+        let exe_dir = exe.parent().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "current executable has no parent directory",
+            )
+        })?;
+
+        let assets_dir = exe_dir.join(ASSETS_SUBDIR);
+        if assets_dir.join(MANIFEST_NAME).is_file() {
+            return Self::load_dir(assets_dir);
+        }
+
+        let binary = fs::read(exe)?;
+        let mut seen = HashSet::new();
+        for asset in RawAsset::find_in_binary(&binary) {
+            if seen.insert(asset.manifest_dir().to_owned()) {
+                let dir = Path::new(asset.manifest_dir())
+                    .join(SOURCE_DIST_SUBDIR)
+                    .join(ASSETS_SUBDIR);
+                if dir.join(MANIFEST_NAME).is_file() {
+                    return Self::load_dir(dir);
+                }
+            }
+        }
+
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "no asset bundle at {} (ship one there with `topcoat asset bundle`, \
+                 or run the application under `topcoat dev`)",
+                assets_dir.display()
+            ),
+        ))
     }
 
     /// Load a bundle from a specific directory.
@@ -125,53 +152,101 @@ impl AssetBundle {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{env, fs};
 
     use super::*;
-    use crate::AssetOptions;
+    use crate::{AssetOptions, ENCODED_ASSET_SIZE};
 
-    /// Encoded records for one resolution scenario: the package `package_name`
-    /// declares the asset at `manifest_dir`.
-    fn records(scenarios: &[(&str, &str)]) -> Vec<RawAsset> {
-        scenarios
-            .iter()
-            .map(|&(package_name, manifest_dir)| {
-                const OPTIONS: AssetOptions = AssetOptions::NONE;
-                let encoded = RawAsset::encode(
-                    AssetId::new("app", "src/main.rs", "assets/logo.png", &OPTIONS),
-                    "assets/logo.png",
-                    package_name,
-                    manifest_dir,
-                    "src/main.rs",
-                    &OPTIONS,
-                );
-                RawAsset::decode(&encoded).unwrap()
-            })
-            .collect()
+    /// A fresh directory under the system temp directory.
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = env::temp_dir().join(format!("topcoat-asset-bundle-{name}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
-    fn dist(dir: &str) -> PathBuf {
-        Path::new(dir).join("dist").join("assets")
+    /// Writes a minimal valid bundle manifest into `dir`.
+    fn write_bundle(dir: &Path) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join(MANIFEST_NAME), "version = 1\nassets = []\n").unwrap();
     }
 
-    #[test]
-    fn dist_dir_comes_from_the_binary_owning_package() {
-        let records = records(&[
-            ("other-app", "/workspace/other-app"),
-            ("my-app", "/workspace/my-app"),
-        ]);
-
-        let dir = AssetBundle::dist_dir_from(&records, "my-app");
-
-        assert_eq!(dir, Some(dist("/workspace/my-app")));
+    /// An asset record as `asset!` embeds it, naming `manifest_dir`.
+    fn record(manifest_dir: &Path) -> [u8; ENCODED_ASSET_SIZE] {
+        RawAsset::encode(
+            AssetId::new("test", "src/lib.rs", "./icon.png", &AssetOptions::NONE),
+            "./icon.png",
+            "test",
+            manifest_dir.to_str().unwrap(),
+            "src/lib.rs",
+            &AssetOptions::NONE,
+        )
     }
 
     #[test]
-    fn dist_dir_is_none_without_the_owning_package() {
-        let records = records(&[("other", "/workspace/other")]);
+    fn load_prefers_the_assets_beside_the_executable() {
+        let root = temp_dir("beside-exe");
+        let crate_dir = root.join("crate");
+        write_bundle(&root.join(ASSETS_SUBDIR));
+        write_bundle(&crate_dir.join(SOURCE_DIST_SUBDIR).join(ASSETS_SUBDIR));
+        let exe = root.join("app");
+        fs::write(&exe, record(&crate_dir)).unwrap();
 
-        let dir = AssetBundle::dist_dir_from(&records, "my-app");
+        let loaded = AssetBundle::load_at(&exe).unwrap();
+        assert_eq!(loaded.dir(), root.join(ASSETS_SUBDIR));
+    }
 
-        assert_eq!(dir, None);
+    #[test]
+    fn load_finds_the_bundle_next_to_the_recording_crate() {
+        let root = temp_dir("records");
+        let crate_dir = root.join("crate");
+        let bundle = crate_dir.join(SOURCE_DIST_SUBDIR).join(ASSETS_SUBDIR);
+        write_bundle(&bundle);
+        let exe = root.join("app");
+        fs::write(&exe, record(&crate_dir)).unwrap();
+
+        let loaded = AssetBundle::load_at(&exe).unwrap();
+        assert_eq!(loaded.dir(), bundle);
+    }
+
+    #[test]
+    fn load_skips_crates_without_a_bundle() {
+        let root = temp_dir("skip");
+        fs::create_dir_all(root.join("other").join("src")).unwrap();
+        let exe = root.join("app");
+        fs::write(&exe, record(&root.join("other"))).unwrap();
+
+        let error = AssetBundle::load_at(&exe).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn load_fails_for_a_binary_without_records() {
+        let root = temp_dir("no-records");
+        let exe = root.join("app");
+        fs::write(&exe, b"").unwrap();
+
+        let error = AssetBundle::load_at(&exe).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn load_env_dir_loads_the_named_directory() {
+        let root = temp_dir("env");
+        let bundle = root.join("dist").join(ASSETS_SUBDIR);
+        write_bundle(&bundle);
+
+        let loaded = AssetBundle::load_env_dir(bundle.clone().into_os_string()).unwrap();
+        assert_eq!(loaded.dir(), bundle);
+    }
+
+    #[test]
+    fn load_env_dir_rejects_a_missing_bundle() {
+        let root = temp_dir("env-missing");
+        let bundle = root.join("dist").join(ASSETS_SUBDIR);
+        fs::create_dir_all(&bundle).unwrap();
+
+        let error = AssetBundle::load_env_dir(bundle.into_os_string()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 }

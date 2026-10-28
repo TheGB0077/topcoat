@@ -94,13 +94,13 @@ impl AssetId {
 
 /// An asset declaration recovered from a compiled binary.
 ///
-/// Contains the asset's ID, path, options, the declaring package's name, and
-/// the source location needed to resolve relative paths.
+/// Contains the asset's ID, path, options, and the source location needed to
+/// resolve relative paths.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RawAsset {
     id: AssetId,
     path: String,
-    package_name: String,
+    crate_name: String,
     manifest_dir: String,
     source_file: String,
     options: AssetOptions,
@@ -114,7 +114,7 @@ impl RawAsset {
     pub const fn encode(
         id: AssetId,
         path: &str,
-        package_name: &str,
+        crate_name: &str,
         manifest_dir: &str,
         source_file: &str,
         options: &AssetOptions,
@@ -124,7 +124,7 @@ impl RawAsset {
         w.write_bytes(&asset_prefix());
         w.write_u64_le(id.0);
         w.write_str(path);
-        w.write_str(package_name);
+        w.write_str(crate_name);
         w.write_str(manifest_dir);
         w.write_str(source_file);
         options.encode_into(&mut w);
@@ -138,7 +138,7 @@ impl RawAsset {
         Some(Self {
             id: AssetId(r.read_u64_le()?),
             path: r.read_str()?.to_owned(),
-            package_name: r.read_str()?.to_owned(),
+            crate_name: r.read_str()?.to_owned(),
             manifest_dir: r.read_str()?.to_owned(),
             source_file: r.read_str()?.to_owned(),
             options: AssetOptions::decode_from(&mut r)?,
@@ -183,16 +183,15 @@ impl RawAsset {
         Source::Path(self.resolved_path())
     }
 
-    /// The name of the declaring package, as written in its `Cargo.toml`.
     #[must_use]
-    pub fn package_name(&self) -> &str {
-        &self.package_name
+    pub fn crate_name(&self) -> &str {
+        &self.crate_name
     }
 
     /// Directory of the crate that declared the asset, as recorded at
     /// compile time.
     #[must_use]
-    pub fn manifest_dir(&self) -> &str {
+    pub(crate) fn manifest_dir(&self) -> &str {
         &self.manifest_dir
     }
 
@@ -323,7 +322,6 @@ macro_rules! asset {
     ($path:expr $(, $($ao:tt)*)?) => {{
         const PATH: &str = $path;
         const CRATE_NAME: &str = env!("CARGO_CRATE_NAME");
-        const PACKAGE_NAME: &str = env!("CARGO_PKG_NAME");
         const MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
         const SOURCE_FILE: &str = file!();
         const OPTIONS: $crate::AssetOptions = $crate::asset_options!($($($ao)*)?);
@@ -332,7 +330,7 @@ macro_rules! asset {
         pub static ENCODED_ASSET: [u8; $crate::ENCODED_ASSET_SIZE] = $crate::RawAsset::encode(
             ID,
             PATH,
-            PACKAGE_NAME,
+            CRATE_NAME,
             MANIFEST_DIR,
             SOURCE_FILE,
             &OPTIONS,
