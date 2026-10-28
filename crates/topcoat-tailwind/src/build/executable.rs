@@ -96,8 +96,9 @@ impl ExecutableSource {
         );
         let dest = dir.join(&file_name);
 
-        // Cached files are complete downloads. Verification only happens
-        // during the download, when a checksum was supplied.
+        // Cached files are complete downloads: they only ever appear through
+        // an atomic rename. Verification happens during the download, when a
+        // checksum was supplied.
         if dest.exists() {
             return Ok(Executable::new(dest));
         }
@@ -221,16 +222,11 @@ impl ExecutableSource {
         Ok(asset.strip_prefix("tailwindcss-").unwrap_or(asset))
     }
 
-    /// The directory the downloaded CLI is cached in: the shared Topcoat cache
-    /// (`topcoat/cache/tailwind`) under the Cargo target directory, falling
-    /// back to `OUT_DIR` itself when the build runs outside Cargo's target
-    /// layout.
+    /// The directory the downloaded CLI is cached in: the user-level Topcoat
+    /// cache, `topcoat/tailwind` under the platform's cache directory,
+    /// created on demand before a download.
     fn cache_dir() -> Result<PathBuf> {
-        if let Some(dir) = topcoat_core::cache::cache_dir("tailwind") {
-            return Ok(dir);
-        }
-        let out_dir = env::var_os("OUT_DIR").ok_or(BuildError::NoOutDir)?;
-        Ok(PathBuf::from(out_dir))
+        topcoat_core::cache::user_cache_dir("tailwind").ok_or(BuildError::NoCacheDir)
     }
 }
 
