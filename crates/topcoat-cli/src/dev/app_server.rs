@@ -8,6 +8,10 @@ use tokio::process::{Child, Command};
 
 use super::port::Address;
 
+/// Suffix that distinguishes the shadow copy of the executable from the
+/// original, so a rebuild can replace the original while the copy runs.
+const SHADOW_COPY_SUFFIX: &str = ".topcoat-dev";
+
 /// A running development application.
 ///
 /// Inherits terminal input and output. Receives the dev server URL through
@@ -19,10 +23,15 @@ pub struct AppServer {
 impl AppServer {
     /// Starts the built executable. On Windows, runs a copy so the original file
     /// remains available for rebuilding.
-    pub fn spawn(exe: &Path, dev_url: &str, address: &Address) -> io::Result<Self> {
+    ///
+    /// `assets` names the bundle directory through `TOPCOAT_ASSETS_PATH`, the
+    /// variable [`AssetBundle::load`](topcoat_asset::AssetBundle::load)
+    /// resolves first.
+    pub fn spawn(exe: &Path, assets: &Path, dev_url: &str, address: &Address) -> io::Result<Self> {
         let exe = shadow_copy_for_windows(exe)?;
         let child = Command::new(exe)
             .env("TOPCOAT_DEV_URL", dev_url)
+            .env("TOPCOAT_ASSETS_PATH", assets)
             .env("HOST", &address.host)
             .env("PORT", address.port.to_string())
             .stdout(Stdio::inherit())
@@ -61,7 +70,7 @@ fn shadow_copy_for_windows(exe: &Path) -> io::Result<PathBuf> {
         return Ok(exe.to_path_buf());
     }
     let mut file_name = exe.file_stem().unwrap_or_default().to_os_string();
-    file_name.push(".topcoat-dev");
+    file_name.push(SHADOW_COPY_SUFFIX);
     if let Some(extension) = exe.extension() {
         file_name.push(".");
         file_name.push(extension);

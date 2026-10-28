@@ -20,6 +20,12 @@ pub enum BuildError {
     },
     #[error("`OUT_DIR` is not set; `Config::render` must be called from a build script")]
     NoOutDir,
+    #[error(
+        "no user cache directory for the Topcoat cache: set `XDG_CACHE_HOME` or `HOME` \
+         (`LOCALAPPDATA` on Windows), or point `BuildConfig::executable` at an existing \
+         Tailwind CLI"
+    )]
+    NoCacheDir,
     #[error("`CARGO_MANIFEST_DIR` is not set; `Config::render` must be called from a build script")]
     NoManifestDir,
     #[error("environment variable `{name}` is not set")]

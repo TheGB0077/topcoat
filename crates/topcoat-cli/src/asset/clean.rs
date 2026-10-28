@@ -1,36 +1,39 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use clap::Args;
 use console::style;
 
-use super::{CACHE_SCOPE, OUT_SUBDIR};
+use super::{CACHE_SCOPE, DIST_SUBDIR};
 
 #[derive(Args)]
 pub(super) struct CleanArgs {
-    /// Asset bundle directory to remove (defaults to every bundle in the
-    /// cargo target directory)
+    /// Asset bundle directory to remove (defaults to every crate's
+    /// `dist/assets` in the workspace, plus the asset download cache)
     #[arg(short, long)]
     out: Option<PathBuf>,
 }
 
 pub(super) async fn run(args: CleanArgs) {
-    let Some(target_dir) = crate::common::cargo::Metadata::workspace()
-        .await
-        .and_then(|metadata| metadata.target_dir())
-    else {
-        eprintln!(
-            "{}",
-            style("could not derive cargo target directory; pass --out").red()
-        );
-        std::process::exit(1);
-    };
-
-    let cache_dir = topcoat_core::cache::cache_dir_in(&target_dir, CACHE_SCOPE);
-    let mut dirs = match args.out {
+    let dirs = match args.out {
         Some(dir) => vec![dir],
-        None => bundle_dirs(&target_dir),
+        None => {
+            let Some(metadata) = crate::common::cargo::Metadata::workspace().await else {
+                eprintln!(
+                    "{}",
+                    style("could not query cargo metadata; pass --out").red()
+                );
+                std::process::exit(1);
+            };
+            let mut dirs: Vec<PathBuf> = metadata
+                .local_package_dirs()
+                .into_iter()
+                .map(|dir| dir.join(DIST_SUBDIR).join(topcoat_asset::ASSETS_SUBDIR))
+                .filter(|dir| dir.join(topcoat_asset::MANIFEST_NAME).is_file())
+                .collect();
+            dirs.extend(topcoat_core::cache::user_cache_dir(CACHE_SCOPE));
+            dirs
+        }
     };
-    dirs.push(cache_dir);
 
     for dir in &dirs {
         match std::fs::remove_dir_all(dir) {
@@ -45,30 +48,4 @@ pub(super) async fn run(args: CleanArgs) {
             }
         }
     }
-}
-
-/// Finds asset bundle directories under the Cargo target directory. Only directories
-/// containing a bundle manifest are included.
-fn bundle_dirs(target_dir: &Path) -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    for dir in subdirs(target_dir) {
-        candidates.extend(subdirs(&dir));
-        candidates.push(dir);
-    }
-    candidates
-        .into_iter()
-        .map(|dir| dir.join(OUT_SUBDIR))
-        .filter(|dir| dir.join(topcoat_asset::MANIFEST_NAME).is_file())
-        .collect()
-}
-
-fn subdirs(dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
-        .collect()
 }
