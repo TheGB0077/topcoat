@@ -38,7 +38,7 @@ fn trail(cx: &Cx) -> String {
     crumbs.join(" / ")
 }
 
-let cx = Cx::default().with(Crumb("Home"));
+let cx = Cx::new().with(Crumb("Home"));
 let posts = cx.with(Crumb("Posts"));
 
 assert_eq!(trail(&posts), "Home / Posts");
@@ -58,7 +58,7 @@ fn email_context(cx: &Cx) -> Cx {
     cx.with(UrlForm::Absolute)
 }
 
-let cx = Cx::default();
+let cx = Cx::new();
 assert_eq!(url_form(&cx), UrlForm::Relative);
 assert_eq!(url_form(&email_context(&cx)), UrlForm::Absolute);
 ```
@@ -90,7 +90,50 @@ fn count_view(cx: &Cx) -> u64 {
 }
 ```
 
-Without a router, put the shared values in a [`ContextMap`], wrap it in an `Arc`, and call [`Cx::new`] for each render. For tests, start with an empty `Cx::default()` and add the values the test needs with [`Cx::with`].
+Without a router, put the shared values in a [`ContextMap`], wrap it in an `Arc`, and attach it to a fresh context with `Cx::new().with_shared(shared)` for each render. See [`Cx::with_shared`]. For tests, start with an empty `Cx::new()` and add the values the test needs with [`Cx::with`].
+
+# Route context
+
+Use route context to declare metadata that layers and layouts can read before the handler runs. Add it with `with(...)` on a [`#[route]`](macro@crate::router::route), [`#[page]`](crate::router::page), or [`#[layout]`](crate::router::layout). The router puts these values in the request context as soon as it selects the route.
+
+For example, a layout can set a default title, and a page can replace it with its own:
+
+```rust
+use topcoat::{
+    Result,
+    context::{Cx, context},
+    router::{Router, Slot, layout, page},
+    view::{View, view},
+};
+
+struct Title(&'static str);
+
+#[layout("/", with(Title("My shop")))]
+async fn shell(cx: &Cx, slot: Slot<'_>) -> Result<impl View> {
+    let Title(title) = context::<Title>(cx);
+
+    Ok(view! {
+        <!DOCTYPE html>
+        <html>
+            <head><title>(title)</title></head>
+            <body>(slot)</body>
+        </html>
+    })
+}
+
+#[page("/products", with(Title("Products")))]
+async fn products() -> Result<impl View> {
+    Ok(view! { <h1>"Products"</h1> })
+}
+
+let router = Router::builder().layout(shell).page(products).build();
+```
+
+Router builder values are added first, followed by route context, then values added during the request with `cx.with(...)`. Each value shadows earlier values of the same type. For pages, route context follows the layout hierarchy from outermost to innermost, with the page's values last. Repeat `with(...)` to add several values. A request that matches no route has no route context.
+
+Shadowed values remain available through [`iter_context`], which visits the closest value first. This lets pages and layouts contribute metadata that an outer layout collects and renders together. For breadcrumbs, each layout and page could declare a `Crumb` value. The outer layout collects them with `iter_context::<Crumb>(cx)` and reverses the order to render the trail from root to page.
+
+Route context is built once, when the router is built. For a value that depends on the request, such as a crumb showing a customer's name, store a function as a [`BoxCxFn`] and call it while rendering. Calls are not memoized, so load data through [`#[memoize]`](macro@memoize) functions the page uses too.
 
 # Work that outlives the handler
 

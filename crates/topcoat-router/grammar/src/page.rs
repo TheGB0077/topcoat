@@ -1,9 +1,10 @@
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote, quote_spanned};
 use syn::{
-    FnArg, ItemFn, Pat, ReturnType,
+    FnArg, ItemFn, Pat, ReturnType, Token,
     parse::{Parse, ParseStream},
     parse_quote,
+    punctuated::Punctuated,
     spanned::Spanned,
 };
 use topcoat_core_grammar::{
@@ -12,21 +13,32 @@ use topcoat_core_grammar::{
 };
 
 use super::{
-    common::{HandlerArg, HandlerArgs, HandlerPath},
+    common::{HandlerArg, HandlerArgs, HandlerPath, RouteContext},
     method::Methods,
 };
 
 pub struct PageAttr {
     /// The declared HTTP methods; the page serves `GET` when omitted.
-    methods: Option<Methods>,
-    path: Option<HandlerPath>,
+    pub methods: Option<Methods>,
+    pub path: Option<HandlerPath>,
+    /// The comma between the methods or path and the `with(...)` entries.
+    pub comma: Option<Token![,]>,
+    pub context: Punctuated<RouteContext, Token![,]>,
 }
 
 impl Parse for PageAttr {
     fn parse(input: ParseStream) -> syn::Result<Self> {
+        let methods = Methods::parse_option(input)?;
+        let path = input.call(HandlerPath::parse_option)?;
         Ok(Self {
-            methods: Methods::parse_option(input)?,
-            path: input.call(HandlerPath::parse_option)?,
+            comma: if (methods.is_some() || path.is_some()) && !input.is_empty() {
+                Some(input.parse()?)
+            } else {
+                None
+            },
+            methods,
+            path,
+            context: Punctuated::parse_terminated(input)?,
         })
     }
 }
@@ -152,6 +164,7 @@ impl ToTokens for Page {
             || quote! { #topcoat_router::Methods::Only(&[#topcoat_router::Method::GET]) },
             ToTokens::to_token_stream,
         );
+        let context = RouteContext::context_method(&attr.context);
         let id = quote! {
             fn id(&self) -> #topcoat_router::RouteId {
                 *ID
@@ -176,6 +189,8 @@ impl ToTokens for Page {
                             PATH
                         }
 
+                        #context
+
                         #render
                     }
                 };
@@ -196,6 +211,8 @@ impl ToTokens for Page {
                         }
 
                         #relative_path
+
+                        #context
 
                         #render
                     }
@@ -279,6 +296,50 @@ mod tests {
             assert!(attr.methods.is_some());
             assert!(attr.path.is_none());
         }
+    }
+
+    #[test]
+    fn attr_accepts_context_entries_after_any_prefix() {
+        let cases = [
+            ("with(a)", 1),
+            ("with(a), with(b),", 2),
+            ("\"/about\", with(a)", 1),
+            ("POST, with(a)", 1),
+            ("POST \"/submit\", with(a), with(b)", 2),
+        ];
+        for (source, entries) in cases {
+            let attr: PageAttr = syn::parse_str(source).unwrap();
+            assert_eq!(attr.context.len(), entries, "{source}");
+        }
+    }
+
+    #[test]
+    fn attr_does_not_take_with_for_a_method() {
+        let attr: PageAttr = syn::parse_str("with(a)").unwrap();
+        assert!(attr.methods.is_none());
+        assert_eq!(attr.context.len(), 1);
+    }
+
+    #[test]
+    fn attr_rejects_context_entries_without_a_separating_comma() {
+        assert!(syn::parse_str::<PageAttr>("\"/about\" with(a)").is_err());
+        assert!(syn::parse_str::<PageAttr>("with(a) with(b)").is_err());
+    }
+
+    #[test]
+    fn attr_rejects_a_leading_comma() {
+        assert!(syn::parse_str::<PageAttr>(", with(a)").is_err());
+    }
+
+    #[test]
+    fn attr_rejects_unknown_entries() {
+        assert!(syn::parse_str::<PageAttr>("\"/about\", title(a)").is_err());
+    }
+
+    #[test]
+    fn attr_rejects_lowercase_methods() {
+        assert!(syn::parse_str::<PageAttr>("get \"/about\"").is_err());
+        assert!(syn::parse_str::<PageAttr>("[GET, post] \"/about\"").is_err());
     }
 
     #[test]

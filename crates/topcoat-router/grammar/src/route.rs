@@ -1,9 +1,10 @@
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote, quote_spanned};
 use syn::{
-    ItemFn, ReturnType, Visibility,
+    ItemFn, ReturnType, Token, Visibility,
     parse::{Parse, ParseStream},
     parse_quote,
+    punctuated::Punctuated,
     spanned::Spanned,
 };
 use topcoat_core_grammar::{
@@ -12,13 +13,16 @@ use topcoat_core_grammar::{
 };
 
 use super::{
-    common::{HandlerArg, HandlerArgs, HandlerPath, request_ident},
+    common::{HandlerArg, HandlerArgs, HandlerPath, RouteContext, request_ident},
     method::Methods,
 };
 
 pub struct RouteAttr {
-    methods: Methods,
-    path: Option<HandlerPath>,
+    pub methods: Methods,
+    pub path: Option<HandlerPath>,
+    /// The comma between the methods or path and the `with(...)` entries.
+    pub comma: Option<Token![,]>,
+    pub context: Punctuated<RouteContext, Token![,]>,
 }
 
 impl Parse for RouteAttr {
@@ -26,6 +30,12 @@ impl Parse for RouteAttr {
         Ok(Self {
             methods: input.parse()?,
             path: input.call(HandlerPath::parse_option)?,
+            comma: if input.is_empty() {
+                None
+            } else {
+                Some(input.parse()?)
+            },
+            context: Punctuated::parse_terminated(input)?,
         })
     }
 }
@@ -144,6 +154,7 @@ impl ToTokens for Route {
             quote! { , #request_ident }
         });
         let methods = &attr.methods;
+        let context = RouteContext::context_method(&attr.context);
         let id = quote! {
             fn id(&self) -> #topcoat_router::RouteId {
                 *ID
@@ -184,6 +195,8 @@ impl ToTokens for Route {
                             PATH
                         }
 
+                        #context
+
                         #handle
                     }
                 };
@@ -204,6 +217,8 @@ impl ToTokens for Route {
                         }
 
                         #relative_path
+
+                        #context
 
                         #handle
                     }
@@ -270,6 +285,19 @@ mod tests {
             Ok(_) => panic!("expected parse error for `{source}`"),
             Err(err) => err.to_string(),
         }
+    }
+
+    #[test]
+    fn attr_accepts_context_entries_after_methods_and_path() {
+        let attr: RouteAttr = syn::parse_str("GET, with(a)").unwrap();
+        assert_eq!(attr.context.len(), 1);
+        let attr: RouteAttr = syn::parse_str("GET \"./report.csv\", with(a), with(b),").unwrap();
+        assert_eq!(attr.context.len(), 2);
+    }
+
+    #[test]
+    fn attr_requires_methods_before_context_entries() {
+        assert!(syn::parse_str::<RouteAttr>("with(a)").is_err());
     }
 
     #[test]

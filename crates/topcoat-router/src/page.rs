@@ -1,6 +1,6 @@
-use std::{borrow::Cow, sync::Arc};
+use std::{any::Any, borrow::Cow, sync::Arc};
 
-use topcoat_core::context::Cx;
+use topcoat_core::context::{ContextMap, ContextValues, Cx};
 use topcoat_view::{
     BoxView, Child,
     internal::{MoveView, ScopeView},
@@ -28,6 +28,13 @@ pub trait Page: Send + Sync + 'static {
 
     /// The URL path this page handles.
     fn path(&self) -> &Path;
+
+    /// The values attached to this page, such as metadata that describes it.
+    ///
+    /// Defaults to an empty map.
+    fn context(&self) -> ContextMap {
+        ContextMap::new()
+    }
 
     /// Renders the page to a [`View`](topcoat_view::View) under the request
     /// context `cx`.
@@ -60,6 +67,10 @@ impl<P: Page + ?Sized> Page for &'static P {
         (**self).path()
     }
 
+    fn context(&self) -> ContextMap {
+        (**self).context()
+    }
+
     fn render<'a>(&'a self, cx: &'a Cx, body: Body) -> BoxView<'a> {
         (**self).render(cx, body)
     }
@@ -85,6 +96,8 @@ pub struct PageFn {
     path: Cow<'static, Path>,
     /// The render function that produces the page [`View`](topcoat_view::View).
     render: PageRenderFn,
+    /// The values attached to this page.
+    context: ContextMap,
 }
 
 impl PageFn {
@@ -108,7 +121,21 @@ impl PageFn {
             methods: methods.into(),
             path: path.into_path(),
             render,
+            context: ContextMap::new(),
         }
+    }
+
+    /// Adds `value` to the context of this page.
+    ///
+    /// The value shadows an earlier value of the same type. Read it during
+    /// a request with [`context`](topcoat_core::context::context).
+    #[must_use]
+    pub fn with<T>(mut self, value: T) -> Self
+    where
+        T: Any + Send + Sync,
+    {
+        self.context.insert(value);
+        self
     }
 }
 
@@ -123,6 +150,10 @@ impl Page for PageFn {
 
     fn path(&self) -> &Path {
         &self.path
+    }
+
+    fn context(&self) -> ContextMap {
+        self.context.clone()
     }
 
     fn render<'a>(&'a self, cx: &'a Cx, body: Body) -> BoxView<'a> {
@@ -147,6 +178,14 @@ pub trait Layout: Send + Sync + 'static {
     /// The path prefix this layout applies to.
     fn path(&self) -> &Path;
 
+    /// The values attached to this layout, such as defaults for the pages it
+    /// wraps.
+    ///
+    /// Defaults to an empty map.
+    fn context(&self) -> ContextMap {
+        ContextMap::new()
+    }
+
     /// Renders the layout, embedding the given child content [`Slot`], to a
     /// [`View`](topcoat_view::View) under the request context `cx`.
     fn render<'a>(&'a self, cx: &'a Cx, slot: Slot<'a>) -> BoxView<'a>;
@@ -155,6 +194,10 @@ pub trait Layout: Send + Sync + 'static {
 impl<L: Layout + ?Sized> Layout for &'static L {
     fn path(&self) -> &Path {
         (**self).path()
+    }
+
+    fn context(&self) -> ContextMap {
+        (**self).context()
     }
 
     fn render<'a>(&'a self, cx: &'a Cx, slot: Slot<'a>) -> BoxView<'a> {
@@ -179,6 +222,8 @@ pub struct LayoutFn {
     path: Cow<'static, Path>,
     /// The render function that wraps the child content [`Slot`].
     render: LayoutRenderFn,
+    /// The values attached to this layout.
+    context: ContextMap,
 }
 
 impl LayoutFn {
@@ -192,13 +237,31 @@ impl LayoutFn {
         Self {
             path: path.into_path(),
             render,
+            context: ContextMap::new(),
         }
+    }
+
+    /// Adds `value` to the context of this layout.
+    ///
+    /// The value shadows an earlier value of the same type. Read it during
+    /// a request with [`context`](topcoat_core::context::context).
+    #[must_use]
+    pub fn with<T>(mut self, value: T) -> Self
+    where
+        T: Any + Send + Sync,
+    {
+        self.context.insert(value);
+        self
     }
 }
 
 impl Layout for LayoutFn {
     fn path(&self) -> &Path {
         &self.path
+    }
+
+    fn context(&self) -> ContextMap {
+        self.context.clone()
     }
 
     fn render<'a>(&'a self, cx: &'a Cx, slot: Slot<'a>) -> BoxView<'a> {
@@ -256,6 +319,18 @@ impl Route for PageWithLayouts {
 
     fn path(&self) -> &Path {
         self.inner.page.path()
+    }
+
+    /// Combines the values of the layouts and the page into one map. Each
+    /// level shadows the levels around it, so a page value shadows a layout
+    /// value of the same type and an inner layout shadows an outer one.
+    fn context(&self) -> ContextMap {
+        let mut context = ContextMap::new();
+        for layout in &self.inner.layouts {
+            layout.context().install(&mut context);
+        }
+        self.inner.page.context().install(&mut context);
+        context
     }
 
     fn handle<'cx>(&'cx self, cx: &'cx Cx, body: Body) -> RouteFuture<'cx> {

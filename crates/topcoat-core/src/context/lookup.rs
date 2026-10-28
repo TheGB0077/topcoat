@@ -87,7 +87,7 @@ where
 ///
 /// struct Crumb(&'static str);
 ///
-/// let cx = Cx::default().with(Crumb("Home")).with(Crumb("Posts"));
+/// let cx = Cx::new().with(Crumb("Home")).with(Crumb("Posts"));
 /// let crumbs: Vec<_> = iter_context::<Crumb>(&cx).map(|crumb| crumb.0).collect();
 ///
 /// assert_eq!(crumbs, ["Posts", "Home"]);
@@ -116,21 +116,21 @@ mod tests {
     fn context_returns_a_sealed_value() {
         let mut shared = ContextMap::new();
         shared.insert(Database("primary"));
-        let cx = Cx::new(Arc::new(shared));
+        let cx = Cx::new().with_shared(Arc::new(shared));
 
         assert_eq!(context::<Database>(&cx), &Database("primary"));
     }
 
     #[test]
     fn try_context_returns_none_for_unregistered_type() {
-        let cx = Cx::default();
+        let cx = Cx::new();
         assert_eq!(try_context::<Database>(&cx), None);
     }
 
     #[test]
     #[should_panic(expected = "attempted to access context")]
     fn context_panics_for_unregistered_type() {
-        let cx = Cx::default();
+        let cx = Cx::new();
         let _: &Database = context(&cx);
     }
 
@@ -138,7 +138,8 @@ mod tests {
     fn iter_context_visits_request_values_before_sealed_values() {
         let mut shared = ContextMap::new();
         shared.insert(Database("primary"));
-        let cx = Cx::new(Arc::new(shared))
+        let cx = Cx::new()
+            .with_shared(Arc::new(shared))
             .with(Database("replica"))
             .with(Database("cache"));
 
@@ -156,7 +157,7 @@ mod tests {
     fn memoized_iterations_rerun_when_a_value_is_added() {
         let count = |cx: Cx, (): ()| iter_context::<Database>(&cx).count();
 
-        let cx = Cx::default().with(Database("primary"));
+        let cx = Cx::new().with(Database("primary"));
         let child = cx.with(Database("replica"));
 
         assert_eq!(*memoize_cache(&cx).memoize(&cx, (), (), count), 1);
@@ -168,7 +169,7 @@ mod tests {
     fn memoized_iterations_through_own_values_depend_on_the_caller() {
         let count = |cx: Cx, (): ()| iter_context::<Database>(&cx.with(Database("own"))).count();
 
-        let cx = Cx::default().with(Database("primary"));
+        let cx = Cx::new().with(Database("primary"));
         let child = cx.with(Database("replica"));
 
         assert_eq!(*memoize_cache(&cx).memoize(&cx, (), (), count), 2);
