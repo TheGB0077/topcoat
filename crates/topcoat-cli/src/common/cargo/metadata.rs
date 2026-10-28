@@ -121,6 +121,24 @@ impl Metadata {
             .max_by_key(|(depth, _)| *depth)
             .and_then(|(_, package)| package["name"].as_str())
     }
+
+    /// The manifest directory of the local package that builds an executable
+    /// named `stem`, or `None` when no local package declares such a binary.
+    pub fn bin_package_dir(&self, stem: &str) -> Option<PathBuf> {
+        self.0["packages"]
+            .as_array()?
+            .iter()
+            .filter(|package| package["source"].is_null())
+            .find(|package| {
+                package["targets"].as_array().is_some_and(|targets| {
+                    targets
+                        .iter()
+                        .any(|target| target["name"].as_str() == Some(stem) && is_bin(target))
+                })
+            })
+            .and_then(|package| package["manifest_path"].as_str())
+            .and_then(|manifest| Path::new(manifest).parent().map(Path::to_path_buf))
+    }
 }
 
 /// Whether the target builds an executable.
@@ -294,5 +312,30 @@ mod tests {
             metadata.package_containing_dir(Path::new("/reg/dep/src")),
             None
         );
+    }
+
+    #[test]
+    fn bin_package_dir_resolves_the_owning_crate() {
+        let metadata = Metadata(json!({
+            "packages": [
+                {
+                    "name": "web",
+                    "source": null,
+                    "manifest_path": "/w/apps/web/Cargo.toml",
+                    "targets": [bin("web", "/w/apps/web/src/main.rs")],
+                },
+                {
+                    "name": "dep",
+                    "source": "registry+https://github.com/rust-lang/crates.io-index",
+                    "manifest_path": "/reg/dep/Cargo.toml",
+                    "targets": [bin("web", "/reg/dep/src/main.rs")],
+                },
+            ],
+        }));
+        assert_eq!(
+            metadata.bin_package_dir("web").as_deref(),
+            Some(Path::new("/w/apps/web"))
+        );
+        assert_eq!(metadata.bin_package_dir("missing"), None);
     }
 }
