@@ -5707,7 +5707,7 @@ dependencies = [
 
 [[package]]
 name = "topcoat-story"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "futures-core",
  "inventory",
@@ -5731,7 +5731,7 @@ dependencies = [
 
 [[package]]
 name = "topcoat-story-grammar"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "prettyplease 0.3.0",
  "proc-macro2",
@@ -5742,7 +5742,7 @@ dependencies = [
 
 [[package]]
 name = "topcoat-story-macro"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "quote",
  "serde",
