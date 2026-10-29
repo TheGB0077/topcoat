@@ -1,5 +1,6 @@
 use topcoat::{
     Result,
+    story::story,
     view::{Attributes, Child, Class, StaticClass, View, class, component, view},
 };
 
@@ -20,6 +21,33 @@ pub enum ButtonVariant {
     Ghost,
     /// A destructive-filled button for actions such as deleting data.
     Destructive,
+}
+
+impl std::str::FromStr for ButtonVariant {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Primary" => Ok(Self::Primary),
+            "Secondary" => Ok(Self::Secondary),
+            "Outline" => Ok(Self::Outline),
+            "Destructive" => Ok(Self::Destructive),
+            "Ghost" => Ok(Self::Ghost),
+            _ => Err(()),
+        }
+    }
+}
+
+impl std::str::FromStr for ButtonSize {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Sm" => Ok(Self::Sm),
+            "Md" => Ok(Self::Md),
+            "Lg" => Ok(Self::Lg),
+            "Icon" => Ok(Self::Icon),
+            _ => Err(()),
+        }
+    }
 }
 
 impl ButtonVariant {
@@ -125,6 +153,7 @@ pub fn button_variants(
 ///     )
 /// }
 /// ```
+#[story(group = "Admin/Decor", component = "Button", name = "Default", params = [select("variant", ["Primary", "Secondary", "Outline", "Destructive", "Ghost"]), select("size", ["Sm", "Md", "Lg", "Icon"])], fixtures = [variant = ButtonVariant::Primary, size = ButtonSize::Md])]
 #[component]
 pub async fn button(
     #[default] variant: ButtonVariant,

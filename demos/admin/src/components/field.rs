@@ -1,5 +1,6 @@
 use topcoat::{
     Result,
+    story::story,
     view::{Attributes, Child, StaticClass, View, attributes, class, component, view},
 };
 
@@ -16,6 +17,18 @@ pub enum FieldOrientation {
     Horizontal,
     /// Switch to a row when the enclosing [`field_group`] is wide enough.
     Responsive,
+}
+
+impl std::str::FromStr for FieldOrientation {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Vertical" => Ok(Self::Vertical),
+            "Horizontal" => Ok(Self::Horizontal),
+            "Responsive" => Ok(Self::Responsive),
+            _ => Err(()),
+        }
+    }
 }
 
 impl FieldOrientation {
@@ -119,6 +132,7 @@ pub async fn field_group(
 /// A `data-invalid="true"` attribute on the field also colors its label.
 /// Validation and the visibility of error messages belong to the caller.
 /// Attributes are forwarded to the wrapper and classes are appended.
+#[story(group = "Admin/Forms", component = "Field", name = "Default", params = [select("orientation", ["Vertical", "Horizontal", "Responsive"])], fixtures = [orientation = FieldOrientation::Vertical])]
 #[component]
 pub async fn field(
     #[default] orientation: FieldOrientation,

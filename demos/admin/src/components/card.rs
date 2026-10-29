@@ -1,5 +1,6 @@
 use topcoat::{
     Result,
+    story::story,
     view::{Attributes, Child, StaticClass, View, class, component, view},
 };
 
@@ -35,6 +36,7 @@ const CARD: StaticClass = class!(
 ///     )
 /// }
 /// ```
+#[story(group = "Admin/Decor", component = "Card", name = "Default", fixtures = [child = Child::new(view! { cx => <p>"Card body"</p> })])]
 #[component]
 pub async fn card(
     #[default] mut attrs: Attributes,
