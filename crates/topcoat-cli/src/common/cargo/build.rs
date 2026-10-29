@@ -9,7 +9,9 @@ use clap::Args;
 use console::style;
 use tokio::{io::AsyncReadExt, process::Command};
 
-use super::{messages::Messages, progress::ProgressScanner, stderr::StderrTail};
+use super::{
+    messages::Messages, metadata::Metadata, progress::ProgressScanner, stderr::StderrTail,
+};
 
 /// Which target `cargo build` compiles and with which profile.
 #[derive(Clone, Default)]
@@ -29,8 +31,12 @@ impl BuildOpts {
         &self,
         mut on_progress: impl FnMut(u64, u64) + Send + 'static,
     ) -> Result<PathBuf, BuildError> {
+        // Several bin targets make `cargo build` link all of them;
+        // `[package] default-run` names the one `cargo run` would pick.
+        let default_run = self.default_run_bin().await;
+        let bin = self.bin.as_deref().or(default_run.as_deref());
         let mut child = self
-            .command()
+            .command(bin)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -94,13 +100,22 @@ impl BuildOpts {
         Ok((path, bytes))
     }
 
-    /// The `cargo build` invocation for these options.
-    fn command(&self) -> Command {
+    /// The `[package] default-run` binary, unless `--bin` names one.
+    async fn default_run_bin(&self) -> Option<String> {
+        if self.bin.is_some() {
+            return None;
+        }
+        Metadata::workspace()
+            .await
+            .and_then(|metadata| metadata.default_run_for_build(self.package.as_deref()))
+    }
+
+    fn command(&self, bin: Option<&str>) -> Command {
         let mut cmd = Command::new("cargo");
         cmd.args(["build", "--message-format=json-diagnostic-rendered-ansi"]);
         cmd.env("CARGO_TERM_PROGRESS_WHEN", "always");
         cmd.env("CARGO_TERM_PROGRESS_WIDTH", "80");
-        if let Some(bin) = &self.bin {
+        if let Some(bin) = bin {
             cmd.args(["--bin", bin]);
         }
         if let Some(package) = &self.package {
@@ -188,7 +203,8 @@ impl fmt::Display for BuildError {
             Self::Multiple(paths) => {
                 write!(
                     f,
-                    "cargo produced multiple targets; pass --bin or --package to choose one, or set `[package] default-run` in Cargo.toml:"
+                    "cargo produced multiple targets; pass --bin to choose one, or set \
+                     `[package] default-run` in Cargo.toml:"
                 )?;
                 for p in paths {
                     write!(f, "\n  {}", p.display())?;
