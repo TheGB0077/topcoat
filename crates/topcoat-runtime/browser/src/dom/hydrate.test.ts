@@ -47,6 +47,7 @@ it("parses an expression that contains markup", () => {
 	expect(parseComment(marker)).toEqual({
 		kind: "expr-start",
 		js: 'a<b && c == "<p>"',
+		sync: false,
 	});
 });
 
