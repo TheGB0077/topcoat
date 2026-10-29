@@ -23,7 +23,7 @@ use keyboard::Keyboard;
 use spinner::Spinner;
 use watch::{Change, SourceWatcher};
 
-use crate::common::cargo::{BuildFlags, BuildOpts, Metadata};
+use crate::common::cargo::{BuildFlags, BuildOpts};
 
 #[derive(Args)]
 pub struct DevCommand {
@@ -34,17 +34,6 @@ pub struct DevCommand {
 impl DevCommand {
     pub async fn run(self) {
         let mut opts: BuildOpts = self.build.into();
-
-        // A package with several bin targets (an extra `src/bin/*.rs`, say) makes
-        // `cargo build` link all of them, and the build cannot tell which one to
-        // serve. `[package] default-run` already names it, so honour it here the way
-        // a bare `cargo run` would. An explicit `--bin` still wins.
-        if opts.bin.is_none()
-            && let Some(metadata) = Metadata::workspace().await
-            && let Some(bin) = metadata.default_run_for_build(opts.package.as_deref())
-        {
-            opts.bin = Some(bin);
-        }
 
         // The broadcast server outlives the individual application
         // processes: browsers stay connected to it across rebuilds.
