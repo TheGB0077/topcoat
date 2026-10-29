@@ -12,7 +12,7 @@ use std::{fmt::Write as _, path::Path};
 
 use topcoat_asset::AssetConfig;
 use topcoat_core::{
-    context::{Cx, try_app_context},
+    context::{Cx, try_context},
     error::Result,
 };
 use topcoat_router::{
@@ -434,7 +434,7 @@ async fn shell(
     let tree = sidebar_tree(filter.as_deref());
     let suffix = preserved_suffix(query.as_deref());
     let filtering = filter.as_deref().is_some_and(|filter| !filter.is_empty());
-    let assets = try_app_context::<AssetConfig>(cx);
+    let assets = try_context::<AssetConfig>(cx);
     let live = assets.is_some();
     let stylesheet = assets.and_then(tailwind_stylesheet);
     Ok(view! {
@@ -1174,7 +1174,7 @@ fn embed_view(cx: &Cx) -> Result<impl View> {
     let name = path_param::<StoryName>(cx);
     let entry: &'static StoryEntry = find(group, component, name).ok_or_not_found()?;
     let query = uri(cx).query().unwrap_or_default().to_owned();
-    let assets = try_app_context::<AssetConfig>(cx);
+    let assets = try_context::<AssetConfig>(cx);
     let stylesheet = assets.and_then(tailwind_stylesheet);
     let live = assets.is_some();
     Ok(view! {
