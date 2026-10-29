@@ -31,12 +31,9 @@ impl BuildOpts {
         &self,
         mut on_progress: impl FnMut(u64, u64) + Send + 'static,
     ) -> Result<PathBuf, BuildError> {
-        // Several bin targets make `cargo build` link all of them;
-        // `[package] default-run` names the one `cargo run` would pick.
-        let default_run = self.default_run_bin().await;
-        let bin = self.bin.as_deref().or(default_run.as_deref());
+        let bin = self.bin().await;
         let mut child = self
-            .command(bin)
+            .command(bin.as_deref())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -100,16 +97,19 @@ impl BuildOpts {
         Ok((path, bytes))
     }
 
-    /// The `[package] default-run` binary, unless `--bin` names one.
-    async fn default_run_bin(&self) -> Option<String> {
-        if self.bin.is_some() {
-            return None;
+    /// The bin target to build: the one `--bin` names, or else the `[package]
+    /// default-run` of the package being built, the same one a bare `cargo run` picks.
+    /// Without either, `cargo build` links every bin target of the package.
+    async fn bin(&self) -> Option<String> {
+        if let Some(bin) = &self.bin {
+            return Some(bin.clone());
         }
         Metadata::workspace()
-            .await
-            .and_then(|metadata| metadata.default_run_for_build(self.package.as_deref()))
+            .await?
+            .default_run_for_build(self.package.as_deref())
     }
 
+    /// The `cargo build` invocation for these options, building `bin` when given.
     fn command(&self, bin: Option<&str>) -> Command {
         let mut cmd = Command::new("cargo");
         cmd.args(["build", "--message-format=json-diagnostic-rendered-ansi"]);
@@ -203,8 +203,7 @@ impl fmt::Display for BuildError {
             Self::Multiple(paths) => {
                 write!(
                     f,
-                    "cargo produced multiple targets; pass --bin to choose one, or set \
-                     `[package] default-run` in Cargo.toml:"
+                    "cargo produced multiple targets; pass --bin or --package to choose one, or set `[package] default-run` in Cargo.toml:"
                 )?;
                 for p in paths {
                     write!(f, "\n  {}", p.display())?;

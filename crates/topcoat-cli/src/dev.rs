@@ -33,7 +33,7 @@ pub struct DevCommand {
 
 impl DevCommand {
     pub async fn run(self) {
-        let mut opts: BuildOpts = self.build.into();
+        let opts: BuildOpts = self.build.into();
 
         // The broadcast server outlives the individual application
         // processes: browsers stay connected to it across rebuilds.
