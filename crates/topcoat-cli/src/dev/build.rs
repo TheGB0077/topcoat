@@ -29,6 +29,7 @@ impl BuildKind {
 /// The executable and asset bundle produced by a successful build.
 pub struct BuildOutput {
     pub exe: PathBuf,
+    pub assets: PathBuf,
     pub stamp: Option<BuildStamp>,
 }
 
@@ -108,7 +109,7 @@ async fn build(kind: BuildKind, opts: BuildOpts) -> Option<BuildOutput> {
         .await;
     drop(spinner);
 
-    let (exe, bytes) = match result {
+    let (target, bytes) = match result {
         Ok(built) => built,
         Err(error) => {
             report_build_error(&error);
@@ -117,7 +118,9 @@ async fn build(kind: BuildKind, opts: BuildOpts) -> Option<BuildOutput> {
     };
 
     let spinner = Spinner::new("bundling assets");
-    let bundled = crate::asset::run_bundle(&exe, &bytes, None).await;
+    // `None` bundles to the owning crate's `dist/assets`, which the dev
+    // server then names to the application it starts.
+    let bundled = crate::asset::run_bundle(&target, &bytes, None).await;
     drop(spinner);
 
     let assets = match bundled {
@@ -141,8 +144,9 @@ async fn build(kind: BuildKind, opts: BuildOpts) -> Option<BuildOutput> {
     }
 
     Some(BuildOutput {
-        stamp: BuildStamp::of(&exe, &assets),
-        exe,
+        stamp: BuildStamp::of(&target.path, &assets),
+        assets: assets.clone(),
+        exe: target.path,
     })
 }
 

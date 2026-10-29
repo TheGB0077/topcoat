@@ -1,79 +1,51 @@
-//! The shared Topcoat cache for files downloaded at build time.
+//! The user-level Topcoat cache.
 //!
-//! The cache lives at `topcoat/cache/<scope>` inside the Cargo target
-//! directory, so it is shared by every package of a workspace and survives
-//! changes to a package's build fingerprint, though not `cargo clean`.
+//! Downloads shared across projects live in a user-level cache
+//! (`topcoat/<scope>` under the platform's cache directory), so several
+//! workspaces reuse one copy of a release artifact. Directories are created
+//! on demand by whoever writes into them.
 
-use std::{
-    env,
-    path::{Path, PathBuf},
-};
+use std::{env, path::PathBuf};
 
-/// The Topcoat cache directory for `scope` inside `target_dir`:
-/// `<target_dir>/topcoat/cache/<scope>`.
-#[must_use]
-pub fn cache_dir_in(target_dir: impl AsRef<Path>, scope: &str) -> PathBuf {
-    target_dir
-        .as_ref()
-        .join("topcoat")
-        .join("cache")
-        .join(scope)
-}
-
-/// The Topcoat cache directory for `scope` of the build the calling build
-/// script runs in, located by resolving the Cargo target directory (or its
-/// target-triple subdirectory, for cross builds) from `OUT_DIR`.
+/// The user-level Topcoat cache directory for `scope`:
+/// `<cache_root>/topcoat/<scope>`.
 ///
-/// Returns `None` when `OUT_DIR` is unset or does not follow Cargo's
-/// `build/<package>-<hash>/out` layout.
+/// The cache root follows each platform's convention: `%LOCALAPPDATA%` on
+/// Windows, `~/Library/Caches` on macOS, and `$XDG_CACHE_HOME` (defaulting
+/// to `~/.cache`) elsewhere.
+///
+/// Stands in for
+/// [`std::fs::HomeDirs::cache_home`](https://github.com/rust-lang/rust/issues/162082),
+/// which tracks the same resolution; switch to it once it stabilizes.
+///
+/// Returns `None` when the platform variable yields no directory.
 #[must_use]
-pub fn cache_dir(scope: &str) -> Option<PathBuf> {
-    let out_dir = PathBuf::from(env::var_os("OUT_DIR")?);
-    Some(cache_dir_in(target_dir(&out_dir)?, scope))
+pub fn user_cache_dir(scope: &str) -> Option<PathBuf> {
+    Some(user_cache_root()?.join("topcoat").join(scope))
 }
 
-/// The Cargo target directory (or its target-triple subdirectory) containing
-/// `out_dir`, which Cargo lays out as
-/// `<target>[/<triple>]/<profile>/build/<package>-<hash>/out`.
-fn target_dir(out_dir: &Path) -> Option<&Path> {
-    let build = out_dir.parent()?.parent()?;
-    if build.file_name()? != "build" {
-        return None;
-    }
-    build.parent()?.parent()
+/// The platform cache directory root, or `None` when its variable yields no
+/// directory.
+#[cfg(windows)]
+fn user_cache_root() -> Option<PathBuf> {
+    env_dir("LOCALAPPDATA")
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[cfg(target_os = "macos")]
+fn user_cache_root() -> Option<PathBuf> {
+    Some(env_dir("HOME")?.join("Library").join("Caches"))
+}
 
-    #[test]
-    fn target_dirs_resolve_from_out_dirs() {
-        let dir = target_dir(Path::new("/repo/target/debug/build/app-0123abc/out"));
-        assert_eq!(dir, Some(Path::new("/repo/target")));
-    }
+#[cfg(all(unix, not(target_os = "macos")))]
+fn user_cache_root() -> Option<PathBuf> {
+    env_dir("XDG_CACHE_HOME")
+        .filter(|dir| dir.is_absolute())
+        .or_else(|| env_dir("HOME").map(|home| home.join(".cache")))
+}
 
-    #[test]
-    fn cross_builds_resolve_to_the_triple_subdirectory() {
-        let out_dir = "/repo/target/aarch64-unknown-linux-gnu/release/build/app-0123abc/out";
-        let dir = target_dir(Path::new(out_dir));
-        assert_eq!(
-            dir,
-            Some(Path::new("/repo/target/aarch64-unknown-linux-gnu"))
-        );
-    }
-
-    #[test]
-    fn foreign_layouts_do_not_resolve() {
-        assert_eq!(target_dir(Path::new("/sandbox/outputs/out")), None);
-        assert_eq!(target_dir(Path::new("/")), None);
-    }
-
-    #[test]
-    fn cache_dirs_follow_the_shared_convention() {
-        assert_eq!(
-            cache_dir_in("/repo/target", "assets"),
-            PathBuf::from("/repo/target/topcoat/cache/assets")
-        );
-    }
+/// The value of `var` as a directory path, when set and non-empty.
+fn env_dir(var: &str) -> Option<PathBuf> {
+    env::var_os(var)
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
 }

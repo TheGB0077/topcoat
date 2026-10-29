@@ -1,31 +1,28 @@
-use std::{
-    error::Error,
-    path::{Path, PathBuf},
-};
+use std::{error::Error, path::PathBuf};
 
 use clap::Args;
 use console::style;
+use topcoat_asset::ASSETS_SUBDIR;
 
-use super::{CACHE_SCOPE, OUT_SUBDIR};
-use crate::common::cargo::{BuildFlags, BuildOpts, Metadata};
+use super::{CACHE_SCOPE, DIST_SUBDIR};
+use crate::common::cargo::{BuildFlags, BuildOpts, BuiltTarget, Metadata};
 
 #[derive(Args)]
 pub(super) struct BundleArgs {
     #[command(flatten)]
     build: BuildFlags,
-    /// Output directory for the bundle (defaults to an `assets` directory
-    /// next to the built executable)
+    /// Output directory for the bundle (defaults to `<crate>/dist/assets`)
     #[arg(short, long)]
     out: Option<PathBuf>,
 }
 
 pub(super) async fn run(args: BundleArgs) {
-    let (exe, bytes) = BuildOpts::from(args.build)
+    let (target, bytes) = BuildOpts::from(args.build)
         .build_and_read(|_, _| {})
         .await
         .unwrap_or_else(|e| e.print_and_exit());
 
-    let out_dir = match run_bundle(&exe, &bytes, args.out).await {
+    let out_dir = match run_bundle(&target, &bytes, args.out).await {
         Ok(path) => path,
         Err(error) => {
             eprintln!(
@@ -41,26 +38,40 @@ pub(super) async fn run(args: BundleArgs) {
 
 /// Bundles assets declared in the executable.
 ///
-/// `bytes` must contain the file at `exe`. Writes the bundle to `out_override`, or to
-/// `assets` beside the executable by default. Keeping bundles beside their executable
-/// prevents builds with different asset IDs from sharing the wrong bundle.
+/// `bytes` must contain the file at `target.path`. Writes the bundle to
+/// `out_override`, or to the `dist/assets` directory of the package Cargo
+/// reported building `target` by default. Fails when that package cannot be
+/// identified; pass `--out` in that case.
+///
+/// `topcoat dev` writes the same location and names it to the application it
+/// starts through `TOPCOAT_ASSETS_PATH`; a deploy ships the bundle as the
+/// `assets` directory beside the binary.
 pub(crate) async fn run_bundle(
-    exe: &Path,
+    target: &BuiltTarget,
     bytes: &[u8],
     out_override: Option<PathBuf>,
 ) -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
-    let target_dir = Metadata::workspace()
-        .await
-        .and_then(|metadata| metadata.target_dir())
-        .ok_or("could not derive cargo target directory")?;
     let out_dir = match out_override {
         Some(dir) => dir,
-        None => exe
-            .parent()
-            .ok_or("built executable has no parent directory")?
-            .join(OUT_SUBDIR),
+        None => {
+            let metadata = Metadata::workspace()
+                .await
+                .ok_or("could not query cargo metadata")?;
+            let crate_dir = target
+                .package
+                .as_deref()
+                .and_then(|package| metadata.package_dir(package))
+                .ok_or_else(|| {
+                    format!(
+                        "could not identify the crate that owns {}; pass --out",
+                        target.path.display()
+                    )
+                })?;
+            crate_dir.join(DIST_SUBDIR).join(ASSETS_SUBDIR)
+        }
     };
-    let cache_dir = topcoat_core::cache::cache_dir_in(&target_dir, CACHE_SCOPE);
+    let cache_dir = topcoat_core::cache::user_cache_dir(CACHE_SCOPE)
+        .ok_or("no user cache directory for asset downloads (set XDG_CACHE_HOME or HOME)")?;
 
     // `bundle` blocks on filesystem and network I/O, so run it off the runtime.
     let bytes = bytes.to_vec();

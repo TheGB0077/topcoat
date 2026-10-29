@@ -132,8 +132,8 @@ impl BundlerConfig {
 
     pub(super) fn resolve_cache_dir(&self) -> PathBuf {
         self.cache_dir.clone().unwrap_or_else(|| {
-            topcoat_core::cache::cache_dir("asset")
-                .expect("could not find asset cache dir for bundling")
+            topcoat_core::cache::user_cache_dir("assets")
+                .expect("no user cache directory for asset downloads (set XDG_CACHE_HOME or HOME)")
         })
     }
 

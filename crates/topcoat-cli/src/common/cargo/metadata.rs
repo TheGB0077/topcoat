@@ -143,6 +143,17 @@ impl Metadata {
             .max_by_key(|(depth, _)| *depth)
             .and_then(|(_, package)| package["name"].as_str())
     }
+
+    /// The manifest directory of the local package named `name`, or `None`
+    /// when no workspace package carries that name.
+    pub fn package_dir(&self, name: &str) -> Option<PathBuf> {
+        self.0["packages"]
+            .as_array()?
+            .iter()
+            .find(|package| package["source"].is_null() && package["name"].as_str() == Some(name))
+            .and_then(|package| package["manifest_path"].as_str())
+            .and_then(|manifest| Path::new(manifest).parent().map(Path::to_path_buf))
+    }
 }
 
 /// Whether the target builds an executable.
@@ -369,5 +380,29 @@ mod tests {
                 ]
             )]
         );
+    }
+
+    #[test]
+    fn package_dirs_resolve_local_packages() {
+        let metadata = Metadata(json!({
+            "packages": [
+                {
+                    "name": "web",
+                    "source": null,
+                    "manifest_path": "/w/apps/web/Cargo.toml",
+                },
+                {
+                    "name": "dep",
+                    "source": "registry+https://github.com/rust-lang/crates.io-index",
+                    "manifest_path": "/reg/dep/Cargo.toml",
+                },
+            ],
+        }));
+        assert_eq!(
+            metadata.package_dir("web").as_deref(),
+            Some(Path::new("/w/apps/web"))
+        );
+        assert_eq!(metadata.package_dir("dep"), None);
+        assert_eq!(metadata.package_dir("missing"), None);
     }
 }

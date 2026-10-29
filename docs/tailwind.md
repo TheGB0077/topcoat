@@ -71,7 +71,7 @@ let router = module_router!()
 
 # Build flow
 
-Call [`BuildConfig::render`] from `build.rs`. By default, it downloads a pinned Tailwind CLI release, scans the package for classes, and writes minified CSS to `$OUT_DIR/tailwind.css`. Downloads are cached across workspace builds.
+Call [`BuildConfig::render`] from `build.rs`. By default, it downloads a pinned Tailwind CLI release, scans the package for classes, and writes minified CSS to `$OUT_DIR/tailwind.css`. Downloads are cached in the user-level Topcoat cache, shared across projects.
 
 The default input is:
 

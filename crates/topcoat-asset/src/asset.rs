@@ -188,6 +188,13 @@ impl RawAsset {
         &self.crate_name
     }
 
+    /// Directory of the crate that declared the asset, as recorded at
+    /// compile time.
+    #[must_use]
+    pub(crate) fn manifest_dir(&self) -> &str {
+        &self.manifest_dir
+    }
+
     /// Resolve the asset path to an absolute filesystem path.
     ///
     /// Paths starting with `./` or `../` are relative to the source file's

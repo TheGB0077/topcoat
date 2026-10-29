@@ -23,15 +23,26 @@ pub struct BuildOpts {
     pub features: Vec<String>,
 }
 
+/// A final output of a successful build: the linked file and the package
+/// that owns it, as reported by Cargo.
+pub struct BuiltTarget {
+    /// The final executable or dynamic library.
+    pub path: PathBuf,
+    /// The name of the Cargo package that owns [`path`](Self::path), from
+    /// the build's artifact messages.
+    pub package: Option<String>,
+}
+
 impl BuildOpts {
-    /// Builds the selected target and returns its linked output path. Reports Cargo's
-    /// progress counts through `on_progress`.
+    /// Builds the selected target and returns its linked output with the
+    /// package that owns it. Reports Cargo's progress counts through
+    /// `on_progress`.
     ///
     /// Accepts executables and dynamic libraries as outputs.
     pub async fn build(
         &self,
         mut on_progress: impl FnMut(u64, u64) + Send + 'static,
-    ) -> Result<PathBuf, BuildError> {
+    ) -> Result<BuiltTarget, BuildError> {
         let mut child = self
             .command()
             .stdout(Stdio::piped())
@@ -83,7 +94,9 @@ impl BuildOpts {
         match artifacts.len() {
             0 => Err(BuildError::NoArtifact),
             1 => Ok(artifacts.remove(0)),
-            _ => Err(BuildError::Multiple(artifacts)),
+            _ => Err(BuildError::Multiple(
+                artifacts.iter().map(|target| target.path.clone()).collect(),
+            )),
         }
     }
 
@@ -91,10 +104,10 @@ impl BuildOpts {
     pub async fn build_and_read(
         &self,
         on_progress: impl FnMut(u64, u64) + Send + 'static,
-    ) -> Result<(PathBuf, Vec<u8>), BuildError> {
-        let path = self.build(on_progress).await?;
-        let bytes = std::fs::read(&path).map_err(BuildError::Read)?;
-        Ok((path, bytes))
+    ) -> Result<(BuiltTarget, Vec<u8>), BuildError> {
+        let target = self.build(on_progress).await?;
+        let bytes = std::fs::read(&target.path).map_err(BuildError::Read)?;
+        Ok((target, bytes))
     }
 
     /// The `cargo build` invocation for these options.

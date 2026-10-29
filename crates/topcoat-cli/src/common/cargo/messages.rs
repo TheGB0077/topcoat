@@ -1,8 +1,6 @@
-use std::path::PathBuf;
-
 use serde::Deserialize;
 
-use super::{artifacts::Artifact, stderr::StderrTail};
+use super::{artifacts::Artifact, build::BuiltTarget, stderr::StderrTail};
 
 /// Diagnostics and artifacts read from Cargo's JSON build output.
 pub(super) struct Messages(Vec<Message>);
@@ -54,15 +52,15 @@ impl Messages {
     }
 
     /// The final linked outputs of the build, from every artifact's
-    /// [`Artifact::final_outputs`].
-    pub(super) fn artifacts(&self) -> Vec<PathBuf> {
+    /// [`Artifact::built_targets`].
+    pub(super) fn artifacts(&self) -> Vec<BuiltTarget> {
         self.0
             .iter()
             .filter_map(|message| match message {
                 Message::Artifact(artifact) => Some(artifact),
                 _ => None,
             })
-            .flat_map(Artifact::final_outputs)
+            .flat_map(Artifact::built_targets)
             .collect()
     }
 }
@@ -96,6 +94,8 @@ impl Diagnostic {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use serde_json::json;
 
     use super::*;
@@ -207,7 +207,11 @@ mod tests {
             }),
         ]);
         assert_eq!(
-            messages.artifacts(),
+            messages
+                .artifacts()
+                .into_iter()
+                .map(|target| target.path)
+                .collect::<Vec<_>>(),
             vec![PathBuf::from("/target/debug/app")]
         );
     }
